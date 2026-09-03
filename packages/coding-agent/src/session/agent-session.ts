@@ -7083,6 +7083,7 @@ export class AgentSession {
 	}
 
 	#scheduleReplanTitleRefresh(): void {
+		if ($env.PI_NO_TITLE) return;
 		// Headless subagent sessions have no operator-visible title, so a todo-init
 		// replan refresh only burns a tiny-model call whose result lands in JSONL
 		// and is never shown (issue #5910). In an interactive host the operator can

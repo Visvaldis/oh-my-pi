@@ -301,7 +301,7 @@ export class UiHelpers {
 							images,
 							liveSteered: message.role === "user" && message.liveSteered === true,
 							timestamp: message.timestamp,
-							semanticResponseGrouping: cfgTuiStickyPrompt.get(this.ctx.settings),
+							semanticResponseGrouping: cfgTuiStickyPrompt.get(this.ctx.settings) === "terminal",
 						});
 						this.ctx.transcriptMessageComponents.set(message, userComponent);
 					}

@@ -31,11 +31,32 @@ afterAll(() => {
 });
 
 afterEach(() => {
-	cfgTuiStickyPrompt.set(Settings.instance, false);
+	cfgTuiStickyPrompt.set(Settings.instance, "off");
 });
 
 function render(text: string): string {
 	return new UserMessageComponent(text).render(80).join("\n");
+}
+
+function renderThroughUiHelpers(text: string): string {
+	const chatContainer = new Container();
+	const sessionManagerMock = { putBlobSync: () => undefined };
+	const helpers = new UiHelpers({
+		chatContainer,
+		sessionManager: sessionManagerMock,
+		viewSession: { sessionManager: sessionManagerMock },
+		transcriptMessageComponents: new WeakMap(),
+		settings: Settings.instance,
+	} as unknown as InteractiveModeContext);
+	helpers.addMessageToChat({
+		role: "user",
+		content: [{ type: "text", text }],
+		attribution: "user",
+		timestamp: Date.now(),
+	});
+	const component = chatContainer.children.at(-1);
+	if (!component) throw new Error("Expected user message component to be appended");
+	return component.render(80).join("\n");
 }
 
 function countOccurrences(haystack: string, needle: string): number {
@@ -123,28 +144,27 @@ describe("UserMessageComponent magic-keyword highlighting", () => {
 		expect(close).toBeLessThan(stream.indexOf(secondPrompt, close));
 	});
 
-	it("uses the sticky prompt setting when constructing transcript user messages", () => {
-		cfgTuiStickyPrompt.set(Settings.instance, true);
-		const chatContainer = new Container();
-		const sessionManagerMock = { putBlobSync: () => undefined };
-		const helpers = new UiHelpers({
-			chatContainer,
-			sessionManager: sessionManagerMock,
-			viewSession: { sessionManager: sessionManagerMock },
-			transcriptMessageComponents: new WeakMap(),
-			settings: Settings.instance,
-		} as unknown as InteractiveModeContext);
-		helpers.addMessageToChat({
-			role: "user",
-			content: [{ type: "text", text: "configured prompt" }],
-			attribution: "user",
-			timestamp: Date.now(),
-		});
-		const component = chatContainer.children.at(-1);
-		if (!component) throw new Error("Expected user message component to be appended");
-		const raw = component.render(80).join("\n");
-		expect(raw.indexOf("\x1b]133;D;0\x07")).toBeLessThan(raw.indexOf("\x1b]133;A\x07"));
-		expect(raw.endsWith("\x1b]133;C\x07")).toBe(true);
+	it("uses terminal sticky prompt mode through UiHelpers", () => {
+		cfgTuiStickyPrompt.set(Settings.instance, "terminal");
+		const raw = renderThroughUiHelpers("terminal prompt");
+		const done = "\x1b]133;D;0\x07";
+		const prompt = "\x1b]133;A\x07";
+		const command = "\x1b]133;B\x07";
+		const output = "\x1b]133;C\x07";
+		expect(raw.startsWith(done + prompt + command)).toBe(true);
+		expect(raw.endsWith(output)).toBe(true);
+	});
+
+	it("keeps viewport sticky prompt mode inside its OSC 133 prompt envelope", () => {
+		cfgTuiStickyPrompt.set(Settings.instance, "viewport");
+		const raw = renderThroughUiHelpers("viewport prompt");
+		const prompt = "\x1b]133;A\x07";
+		const command = "\x1b]133;B\x07";
+		const output = "\x1b]133;C\x07";
+		const done = "\x1b]133;D;0\x07";
+		expect(raw.startsWith(prompt)).toBe(true);
+		expect(raw.indexOf("viewport prompt")).toBeLessThan(raw.indexOf(command));
+		expect(raw.endsWith(command + output + done)).toBe(true);
 	});
 
 	it("collapses image markers to identity-colored chip tokens in the rendered bubble", () => {

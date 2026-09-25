@@ -389,14 +389,32 @@ export const cfgTuiResizeScrollback = register({
 
 export const cfgTuiStickyPrompt = register({
 	id: "tui.stickyPrompt",
-	type: "boolean",
-	default: false,
+	type: "enum",
+	values: ["off", "terminal", "viewport"] as const,
+	default: "off",
 	ui: {
 		tab: "appearance",
 		group: "Display",
 		label: "Sticky Prompt Headers",
 		description:
-			"Group each user prompt and response with OSC 133 so supported terminals can keep the prompt visible over scrolled output. Requires terminal-side sticky scroll (for example, VS Code's terminal.integrated.stickyScroll.enabled); unsupported terminals show no sticky header.",
+			"Choose how sticky prompt headers are presented: terminal mode uses OSC 133 with native scrollback and requires terminal support; viewport mode uses OMP-owned scrolling; off adds no sticky grouping.",
+		options: [
+			{
+				value: "off",
+				label: "Off",
+				description: "Do not add sticky grouping to prompts and responses.",
+			},
+			{
+				value: "terminal",
+				label: "Terminal",
+				description: "Group prompts and responses with OSC 133 in native scrollback; requires terminal support for sticky scroll.",
+			},
+			{
+				value: "viewport",
+				label: "Viewport",
+				description: "Keep prompt headers visible with OMP-owned scrolling; works in terminals such as Ghostty.",
+			},
+		],
 	},
 });
 

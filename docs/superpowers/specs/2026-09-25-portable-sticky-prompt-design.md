@@ -52,6 +52,8 @@ The transcript container remains the source of semantic block order and componen
 
 Committed entries remain available through the existing transcript ledger. The viewport path must avoid a full-history render on every frame: cache per-entry row counts by width and walk only enough entries to fill the requested window. Mutable/live entries invalidate their cached geometry; settled historical entries reuse it. This preserves responsiveness for long sessions.
 
+Viewport mode adds an internal `archived` transcript-entry state distinct from terminal-`committed`. Finalized ordered prefixes move to `archived` without producing a `HistoryBatch`; this removes them from live-capacity accounting while retaining their components and semantic rows for OMP projection. Before graceful shutdown, the container converts archived entries back into a flushable finalized prefix and the existing acknowledged history path emits the complete transcript exactly once. Switching presentation modes reconstructs a fresh container after clearing display, so archived and terminal-committed state never mix across modes.
+
 The fixed header is separate viewport chrome, not a duplicate transcript block. It renders the complete initiating prompt up to a bounded header-height policy; excess rows are clipped with an explicit continuation indicator. Header height is included before transcript allocation so the total frame remains bounded. When the first visible row has no response-initiating prompt, no sticky header is painted.
 
 ## Prompt association
@@ -109,6 +111,7 @@ Permanent tests cover consumer-visible behavior:
 9. Synthetic/developer messages do not become sticky prompt headers.
 10. Mode changes trigger one transcript rebuild/display reset.
 11. Long-history projection renders only the required entry range rather than the entire transcript.
+12. More than 256 finalized viewport entries archive without blocking admission, then flush exactly once on shutdown.
 
 Smoke verification runs the built CLI in Ghostty using OMP viewport mode and in VS Code using terminal-native mode. Ghostty must show a non-clickable prompt header while OMP scrolls with the mouse wheel/Page keys; VS Code must retain its native sticky-scroll behavior.
 

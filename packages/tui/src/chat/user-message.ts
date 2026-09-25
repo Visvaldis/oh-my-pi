@@ -38,16 +38,18 @@ import { Memo } from "../native/memo";
 // synthesized arrow keys on omp's pty, slamming the editor caret to column 0
 // (#8030, #6115).
 //
-// `133;C` is therefore emitted immediately followed by `133;D;0` at the end of
-// the bubble. That clears the input state without reintroducing the grouping
-// problem the marker was originally omitted to avoid: the command zone opens
-// and finishes inside this component, so later assistant/tool output can never
-// be grouped under the first submitted prompt.
-const OSC133_ZONE_START = "\x1b]133;A\x07";
-const OSC133_ZONE_END = "\x1b]133;B\x07";
-const OSC133_COMMAND_START = "\x1b]133;C\x07";
+// Disabled bubbles close their own `B → C → D;0` lifecycle, so later output
+// cannot be grouped beneath the prompt. Grouped bubbles instead start `D;0 →
+// A → B` before the visible prompt and end with `C`: model output remains in
+// that command zone until the next grouped prompt closes it. Both paths emit
+// `C` in the same render as every `B`, preventing terminal input semantics
+// from latching while model output renders.
+const OSC133_PROMPT_START = "\x1b]133;A\x07";
+const OSC133_COMMAND_START = "\x1b]133;B\x07";
+const OSC133_OUTPUT_START = "\x1b]133;C\x07";
 const OSC133_COMMAND_DONE = "\x1b]133;D;0\x07";
-const OSC133_ZONE_CLOSE = OSC133_ZONE_END + OSC133_COMMAND_START + OSC133_COMMAND_DONE;
+const OSC133_TURN_START = OSC133_COMMAND_DONE + OSC133_PROMPT_START + OSC133_COMMAND_START;
+const OSC133_DISABLED_TURN_CLOSE = OSC133_COMMAND_START + OSC133_OUTPUT_START + OSC133_COMMAND_DONE;
 
 /** How a user bubble styles its prose and chips (see {@link userBubbleColor}). */
 export interface UserBubbleOptions {
@@ -59,6 +61,8 @@ export interface UserBubbleOptions {
 	synthetic?: boolean;
 	/** Delivered into the response that was streaming; marked `*` at the bubble's top-left. */
 	liveSteered?: boolean;
+	/** Group the following transcript output with this user bubble through OSC 133. */
+	semanticResponseGrouping?: boolean;
 	/** SKILL.md path for a skill chip by name; `undefined` leaves the chip unlinked. */
 	skillPath?: (name: string) => string | undefined;
 	/** When the message was sent (ms); shown beside the native hover toolbar. */
@@ -135,6 +139,7 @@ export class UserMessageComponent extends Container implements ReactionTarget {
 	readonly #text: string;
 	/** Matches the composer tokens in {@link #text} (chips, skills, this message's mentions). */
 	readonly #tokens: RegExp;
+	readonly #semanticResponseGrouping: boolean;
 	#reaction: string | undefined;
 	#native: NativeNode | undefined;
 
@@ -161,6 +166,7 @@ export class UserMessageComponent extends Container implements ReactionTarget {
 		this.#imageLinks = options.imageLinks;
 		this.#text = text;
 		this.#tokens = composerTokenRegex(mentionLabels);
+		this.#semanticResponseGrouping = options.semanticResponseGrouping === true;
 		const markdown = new Markdown(text, 1, 1, getMarkdownTheme(), {
 			bgColor,
 			color: userBubbleColor(options, this.#tokens),
@@ -279,8 +285,8 @@ export class UserMessageComponent extends Container implements ReactionTarget {
 		}
 		const wrapped = lines.slice();
 		if (this.#reaction !== undefined || this.#liveSteered) wrapped[0] = this.#badgeRow(width);
-		wrapped[0] = OSC133_ZONE_START + wrapped[0];
-		wrapped[wrapped.length - 1] = wrapped[wrapped.length - 1] + OSC133_ZONE_CLOSE;
+		wrapped[0] = (this.#semanticResponseGrouping ? OSC133_TURN_START : OSC133_PROMPT_START) + wrapped[0];
+		wrapped[wrapped.length - 1] += this.#semanticResponseGrouping ? OSC133_OUTPUT_START : OSC133_DISABLED_TURN_CLOSE;
 		this.#zoneSource = lines;
 		this.#zoneLines = wrapped;
 		return wrapped;

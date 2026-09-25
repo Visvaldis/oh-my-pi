@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, it } from "bun:test";
+import { afterAll, afterEach, beforeAll, describe, expect, it } from "bun:test";
 import * as path from "node:path";
 import * as url from "node:url";
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
@@ -14,7 +14,7 @@ import type { InteractiveModeContext } from "@oh-my-pi/pi-coding-agent/modes/typ
 import { UiHelpers } from "@oh-my-pi/pi-coding-agent/modes/utils/ui-helpers";
 import { Container } from "@oh-my-pi/pi-tui";
 
-import { cfgTuiHyperlinks } from "@oh-my-pi/pi-coding-agent/modes/settings";
+import { cfgTuiHyperlinks, cfgTuiStickyPrompt } from "@oh-my-pi/pi-coding-agent/modes/settings";
 
 beforeAll(async () => {
 	resetSettingsForTest();
@@ -28,6 +28,10 @@ beforeAll(async () => {
 afterAll(() => {
 	setMagicKeywords([]);
 	resetSettingsForTest();
+});
+
+afterEach(() => {
+	cfgTuiStickyPrompt.set(Settings.instance, false);
 });
 
 function render(text: string): string {
@@ -86,6 +90,61 @@ describe("UserMessageComponent magic-keyword highlighting", () => {
 		expect(raw.endsWith("\x1b]133;B\x07\x1b]133;C\x07\x1b]133;D;0\x07")).toBe(true);
 		expect(countOccurrences(raw, "\x1b]133;C\x07")).toBe(1);
 		expect(countOccurrences(raw, "\x1b]133;D;0\x07")).toBe(1);
+	});
+
+	it("groups a multiline prompt with its following response when enabled", () => {
+		const raw = new UserMessageComponent("first line\nsecond line", { semanticResponseGrouping: true })
+			.render(80)
+			.join("\n");
+		const done = "\x1b]133;D;0\x07";
+		const prompt = "\x1b]133;A\x07";
+		const command = "\x1b]133;B\x07";
+		const output = "\x1b]133;C\x07";
+		expect(raw.indexOf(done)).toBeLessThan(raw.indexOf(prompt));
+		expect(raw.indexOf(prompt)).toBeLessThan(raw.indexOf(command));
+		expect(raw.indexOf(command)).toBeLessThan(raw.indexOf("first line"));
+		expect(raw.indexOf("second line")).toBeLessThan(raw.indexOf(output));
+		expect(raw.indexOf(done, raw.indexOf(output) + output.length)).toBe(-1);
+	});
+
+	it("closes a grouped response when the next prompt begins", () => {
+		const first = new UserMessageComponent("first prompt", { semanticResponseGrouping: true }).render(80).join("\n");
+		const response = "representative assistant and tool output";
+		const second = new UserMessageComponent("second prompt", { semanticResponseGrouping: true })
+			.render(80)
+			.join("\n");
+		const stream = first + response + second;
+		const output = "\x1b]133;C\x07";
+		const done = "\x1b]133;D;0\x07";
+		const secondPrompt = "\x1b]133;A\x07";
+		expect(stream.indexOf(output)).toBeLessThan(stream.indexOf(response));
+		const close = stream.indexOf(done, stream.indexOf(response) + response.length);
+		expect(close).toBeGreaterThan(stream.indexOf(response));
+		expect(close).toBeLessThan(stream.indexOf(secondPrompt, close));
+	});
+
+	it("uses the sticky prompt setting when constructing transcript user messages", () => {
+		cfgTuiStickyPrompt.set(Settings.instance, true);
+		const chatContainer = new Container();
+		const sessionManagerMock = { putBlobSync: () => undefined };
+		const helpers = new UiHelpers({
+			chatContainer,
+			sessionManager: sessionManagerMock,
+			viewSession: { sessionManager: sessionManagerMock },
+			transcriptMessageComponents: new WeakMap(),
+			settings: Settings.instance,
+		} as unknown as InteractiveModeContext);
+		helpers.addMessageToChat({
+			role: "user",
+			content: [{ type: "text", text: "configured prompt" }],
+			attribution: "user",
+			timestamp: Date.now(),
+		});
+		const component = chatContainer.children.at(-1);
+		if (!component) throw new Error("Expected user message component to be appended");
+		const raw = component.render(80).join("\n");
+		expect(raw.indexOf("\x1b]133;D;0\x07")).toBeLessThan(raw.indexOf("\x1b]133;A\x07"));
+		expect(raw.endsWith("\x1b]133;C\x07")).toBe(true);
 	});
 
 	it("collapses image markers to identity-colored chip tokens in the rendered bubble", () => {
@@ -161,6 +220,7 @@ describe("UserMessageComponent magic-keyword highlighting", () => {
 			sessionManager: sessionManagerMock,
 			viewSession: { sessionManager: sessionManagerMock },
 			transcriptMessageComponents: new WeakMap(),
+			settings: Settings.instance,
 		} as unknown as InteractiveModeContext);
 		const message: AgentMessage = {
 			role: "user",

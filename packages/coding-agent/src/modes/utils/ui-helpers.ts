@@ -57,6 +57,7 @@ import {
 } from "../../session/messages";
 import type { SessionContext, StrippedToolCallsMarker } from "../../session/session-context";
 import { buildSkillCommandPrompt, invokeSkillCommandFromText, isKnownSkillCommand } from "../skill-command";
+import { cfgTuiStickyPrompt } from "../settings";
 import {
 	createAssistantMessageComponent,
 	getAssistantMessageLinkTargets,
@@ -300,6 +301,7 @@ export class UiHelpers {
 							images,
 							liveSteered: message.role === "user" && message.liveSteered === true,
 							timestamp: message.timestamp,
+							semanticResponseGrouping: cfgTuiStickyPrompt.get(this.ctx.settings),
 						});
 						this.ctx.transcriptMessageComponents.set(message, userComponent);
 					}

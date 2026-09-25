@@ -387,6 +387,19 @@ export const cfgTuiResizeScrollback = register({
 	},
 });
 
+export const cfgTuiStickyPrompt = register({
+	id: "tui.stickyPrompt",
+	type: "boolean",
+	default: false,
+	ui: {
+		tab: "appearance",
+		group: "Display",
+		label: "Sticky Prompt Headers",
+		description:
+			"Group each user prompt and response with OSC 133 so supported terminals can keep the prompt visible over scrolled output. Requires terminal-side sticky scroll (for example, VS Code's terminal.integrated.stickyScroll.enabled); unsupported terminals show no sticky header.",
+	},
+});
+
 export const cfgTerminalShowProgress = register({
 	id: "terminal.showProgress",
 	type: "boolean",

@@ -360,6 +360,7 @@ import {
 	cfgTuiMouse,
 	cfgTuiRenderMermaid,
 	cfgTuiResizeScrollback,
+	cfgTuiStickyPrompt,
 	cfgTuiTextSizing,
 	cfgTuiTight,
 	cfgTuiTitleSpinner,
@@ -394,6 +395,7 @@ const cfgLiveUiSettings = combine({
 	showHardwareCursor: cfgShowHardwareCursor,
 	"tui.maxInlineImages": cfgTuiMaxInlineImages,
 	"tui.resizeScrollback": cfgTuiResizeScrollback,
+	"tui.stickyPrompt": cfgTuiStickyPrompt,
 	"tui.imeSafeCursor": cfgTuiImeSafeCursor,
 	autocompleteMaxVisible: cfgAutocompleteMaxVisible,
 	"spelling.typoDetection": cfgSpellingTypoDetection,
@@ -3499,6 +3501,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		) {
 			rebuildChat = true;
 		}
+		if (any("tui.stickyPrompt")) rebuildChat = true;
 		if (any("tui.renderMermaid")) {
 			setMarkdownMermaidRendering(cfgTuiRenderMermaid.get(this.settings));
 			rebuildChat = true;

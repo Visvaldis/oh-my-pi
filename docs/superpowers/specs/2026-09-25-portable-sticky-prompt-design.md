@@ -46,8 +46,8 @@ The transcript container remains the source of semantic block order and componen
 
 1. Renders only the logical row range required for the current viewport.
 2. Reports block spans and the initiating user-message identity for the first visible response row.
-3. Maintains a logical vertical offset measured from the transcript tail.
-4. Reflows and clamps the offset on width or height changes.
+3. Maintains a logical vertical offset from the transcript tail plus the previously measured total row count.
+4. While follow mode is suspended, increases that offset by newly appended row count so the selected historical window stays fixed; width changes reflow and clamp it.
 5. Follows the live tail while the offset is zero.
 
 Committed entries remain available through the existing transcript ledger. The viewport path must avoid a full-history render on every frame: cache per-entry row counts by width and walk only enough entries to fill the requested window. Mutable/live entries invalidate their cached geometry; settled historical entries reuse it. This preserves responsiveness for long sessions.
@@ -74,7 +74,7 @@ Viewport mode keeps the composer focused for normal typing.
 - Home: move to the oldest available transcript row.
 - End: return to the live tail and resume follow mode.
 
-Scrolling upward sets a nonzero tail-relative offset and suspends automatic following. New output does not move the selected historical window. Returning to offset zero resumes live following.
+Scrolling upward sets a nonzero tail-relative offset and suspends automatic following. As new rows arrive, OMP increases the offset by the same amount so the selected historical window does not move. Returning to offset zero resumes live following.
 
 Mouse events are consumed only when they map to transcript scrolling. Prompt headers are display-only and have no click target. Existing overlays and fullscreen views retain input priority over transcript navigation.
 

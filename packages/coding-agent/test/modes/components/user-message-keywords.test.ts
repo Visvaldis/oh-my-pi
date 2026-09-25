@@ -74,6 +74,38 @@ describe("UserMessageComponent magic-keyword highlighting", () => {
 		expect(raw).not.toContain("orchestrate");
 	});
 
+	it("marks only non-synthetic user bubbles as response-turn initiators", () => {
+		expect(new UserMessageComponent("user prompt").initiatesResponseTurn).toBe(true);
+		expect(new UserMessageComponent("agent input", { synthetic: true }).initiatesResponseTurn).toBe(false);
+	});
+
+	it("renders a bounded, marker-free sticky prompt with a styled ellipsis when clipped", () => {
+		const component = new UserMessageComponent(`visible first line ${"continued prompt ".repeat(8)}`, {
+			semanticResponseGrouping: true,
+		});
+		const rows = component.renderStickyPrompt(24, 3);
+		expect(component.renderStickyPrompt(24, 3)).toBe(rows);
+		const visible = Bun.stripANSI(rows.join("\n"));
+
+		expect(rows.length).toBeLessThanOrEqual(3);
+		expect(rows.every(row => Bun.stringWidth(Bun.stripANSI(row)) <= 24)).toBe(true);
+		expect(visible).toContain("visible first line");
+		expect(visible.endsWith("…")).toBe(true);
+		expect(rows.join("\n")).not.toContain("\x1b]133;");
+		expect(rows.at(-1)).toContain(theme.getBgAnsi("userMessageBg"));
+		expect(component.renderStickyPrompt(80, 0)).toEqual([]);
+		expect(component.renderStickyPrompt(80, -1)).toEqual([]);
+		const renderedRows = component.render(24);
+		expect(component.render(24)).toBe(renderedRows);
+	});
+
+	it("bounds a live-steered sticky prompt row at width one", () => {
+		const rows = new UserMessageComponent("prompt", { liveSteered: true }).renderStickyPrompt(1, 100);
+		expect(rows.length).toBeGreaterThan(0);
+		expect(rows.every(row => Bun.stringWidth(Bun.stripANSI(row)) <= 1)).toBe(true);
+		expect(rows.join("\n")).not.toContain("\x1b]133;");
+	});
+
 	it("does not paint a keyword inside an inline code span", () => {
 		const raw = render("ship the `orchestrate` helper");
 		expect(Bun.stripANSI(raw)).toContain("orchestrate");

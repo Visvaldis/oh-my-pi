@@ -973,9 +973,9 @@ describe("TranscriptContainer scrollable viewport projection", () => {
 		const responseSpan = reordered.spans.find(span => span.component === firstResponse);
 		if (!responseSpan) throw new Error("Expected the reordered response span");
 
-		expect(
-			projectionAtRow(transcript, 80, reordered.cursor.measuredRows, responseSpan.start).prompt,
-		).toBe(secondPrompt);
+		expect(projectionAtRow(transcript, 80, reordered.cursor.measuredRows, responseSpan.start).prompt).toBe(
+			secondPrompt,
+		);
 	});
 
 	it("reports a visible initiating prompt in its projected window", () => {
@@ -985,7 +985,8 @@ describe("TranscriptContainer scrollable viewport projection", () => {
 		if (!promptSpan) throw new Error("Expected the second prompt span");
 
 		const promptTextRow = full.rows.findIndex(
-			(row, rowIndex) => rowIndex >= promptSpan.start && rowIndex < promptSpan.end && Bun.stripANSI(row).trim().length > 0,
+			(row, rowIndex) =>
+				rowIndex >= promptSpan.start && rowIndex < promptSpan.end && Bun.stripANSI(row).trim().length > 0,
 		);
 		if (promptTextRow < 0) throw new Error("Expected a visible prompt text row");
 		const promptWindow = projectionAtRow(transcript, 80, full.cursor.measuredRows, promptTextRow);
@@ -1034,12 +1035,7 @@ describe("TranscriptContainer scrollable viewport projection", () => {
 		transcript.addChild(changing);
 		transcript.addChild(new Block(["tail"], true));
 		const measured = transcript.renderScrollableViewport(80, 100, frame, cursor(0, 0, 80));
-		const middle = transcript.renderScrollableViewport(
-			80,
-			2,
-			frame,
-			cursor(2, measured.cursor.measuredRows, 80),
-		);
+		const middle = transcript.renderScrollableViewport(80, 2, frame, cursor(2, measured.cursor.measuredRows, 80));
 		expect(middle.rows).toEqual(["row 3", "row 4"]);
 
 		changing.replace(["row 1", "row 2", "row 3", "row 4", "row 5"]);
@@ -1056,12 +1052,7 @@ describe("TranscriptContainer scrollable viewport projection", () => {
 		transcript.addChild(tail);
 
 		const full = transcript.renderScrollableViewport(80, 10, frame, cursor(0, 0, 80));
-		const suspended = transcript.renderScrollableViewport(
-			80,
-			1,
-			frame,
-			cursor(2, full.cursor.measuredRows, 80),
-		);
+		const suspended = transcript.renderScrollableViewport(80, 1, frame, cursor(2, full.cursor.measuredRows, 80));
 		expect(suspended.rows).toEqual(["history row"]);
 
 		tail.finalize(["final row 1", "final row 2", "final row 3"]);
@@ -1132,18 +1123,8 @@ describe("TranscriptContainer scrollable viewport projection", () => {
 		const response = new Block(["r1", "r2", "r3", "r4", "r5"], false);
 		transcript.addChild(response);
 		const measured = transcript.renderScrollableViewport(80, 100, frame, cursor(0, 0, 80));
-		const suspended = transcript.renderScrollableViewport(
-			80,
-			3,
-			frame,
-			cursor(2, measured.cursor.measuredRows, 80),
-		);
-		const following = transcript.renderScrollableViewport(
-			80,
-			3,
-			frame,
-			cursor(0, measured.cursor.measuredRows, 80),
-		);
+		const suspended = transcript.renderScrollableViewport(80, 3, frame, cursor(2, measured.cursor.measuredRows, 80));
+		const following = transcript.renderScrollableViewport(80, 3, frame, cursor(0, measured.cursor.measuredRows, 80));
 
 		response.replace(["r1", "r2", "r3", "r4", "r5", "r6"]);
 		const anchored = transcript.renderScrollableViewport(80, 3, frame, suspended.cursor);
@@ -1200,7 +1181,6 @@ describe("TranscriptContainer scrollable viewport projection", () => {
 	});
 
 	it("reuses cached historical rows outside nearby projected windows", () => {
-
 		const transcript = new TranscriptContainer();
 		const entries: CountingBlock[] = [];
 		const prompts: CountingUserMessageComponent[] = [];
@@ -1308,9 +1288,7 @@ describe("TranscriptContainer scrollable viewport projection", () => {
 		expect(transcript.blockStates()).toEqual(Array.from({ length: 300 }, () => "archived"));
 		expect(transcript.canAdmit(1)).toBe(true);
 		expect(transcript.canRemoveBlock(entries[0]!)).toBe(false);
-		expect(transcript.renderScrollableViewport(80, 1, frame, cursor(0, 0, 80)).rows).toEqual([
-			"archived row 299",
-		]);
+		expect(transcript.renderScrollableViewport(80, 1, frame, cursor(0, 0, 80)).rows).toEqual(["archived row 299"]);
 		expect(transcript.peekFlushBatch(80)).toBeUndefined();
 
 		transcript.releaseViewportArchiveForFlush();
@@ -1380,12 +1358,8 @@ describe("TranscriptContainer scrollable viewport projection", () => {
 			expect(transcript.renderViewport(80, 10, frame)).toEqual(["active tail"]);
 		}
 
-		expect(historical.map(entry => entry.finalizationChecks)).toEqual(
-			Array.from({ length: 300 }, () => 0),
-		);
-		expect(historical.map(entry => entry.renderCalls)).toEqual(
-			Array.from({ length: 300 }, () => 0),
-		);
+		expect(historical.map(entry => entry.finalizationChecks)).toEqual(Array.from({ length: 300 }, () => 0));
+		expect(historical.map(entry => entry.renderCalls)).toEqual(Array.from({ length: 300 }, () => 0));
 		expect(childIndexReads).toBe(0);
 		expect(tail.renderCalls).toBeGreaterThan(0);
 	});

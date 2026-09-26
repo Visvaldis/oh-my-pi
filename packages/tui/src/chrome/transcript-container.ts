@@ -218,9 +218,7 @@ function viewportGeometryPrefixRows(
 	if (end <= prefixEnd) return node.rowCount;
 	const middle = start + Math.floor((end - start) / 2);
 	if (prefixEnd <= middle) return viewportGeometryPrefixRows(node.left, start, middle, prefixEnd);
-	return (
-		(node.left?.rowCount ?? 0) + viewportGeometryPrefixRows(node.right, middle, end, prefixEnd)
-	);
+	return (node.left?.rowCount ?? 0) + viewportGeometryPrefixRows(node.right, middle, end, prefixEnd);
 }
 
 function viewportGeometryPrefixNonempty(
@@ -233,9 +231,7 @@ function viewportGeometryPrefixNonempty(
 	if (end <= prefixEnd) return node.nonemptyCount;
 	const middle = start + Math.floor((end - start) / 2);
 	if (prefixEnd <= middle) return viewportGeometryPrefixNonempty(node.left, start, middle, prefixEnd);
-	return (
-		(node.left?.nonemptyCount ?? 0) + viewportGeometryPrefixNonempty(node.right, middle, end, prefixEnd)
-	);
+	return (node.left?.nonemptyCount ?? 0) + viewportGeometryPrefixNonempty(node.right, middle, end, prefixEnd);
 }
 
 function viewportGeometryPrefixKnown(
@@ -953,7 +949,7 @@ export class TranscriptContainer extends Container {
 					maxOffset: window.maxOffset,
 					maxOffsetExact: window.maxOffsetExact,
 					promptVisible,
-			  }
+				}
 			: {
 					rows: projectedRows,
 					spans,
@@ -962,7 +958,7 @@ export class TranscriptContainer extends Container {
 					maxOffsetExact: window.maxOffsetExact,
 					prompt,
 					promptVisible,
-			  };
+				};
 	}
 
 	/** Collapse a per-line owner list into run-length block spans, clamped to `length`. */
@@ -1899,20 +1895,18 @@ export class TranscriptContainer extends Container {
 		this.#clearViewportGeometry();
 		const existing = new Map(this.#entries.map(entry => [entry.component, entry]));
 		this.#entries = this.children.map((component, index) => {
-			const entry =
-				existing.get(component) ??
-				{
-					index,
-					component,
-					state: isFinalized(component) ? "settled" : "active",
-					mode: blockMode(component),
-					stableRows: EMPTY_STABLE_ROWS,
-					renderedStableByWidth: new Map(),
-					stableRowCountByWidth: new Map(),
-					emitted: 0,
-					stableFrozen: false,
-					viewportRowsByWidth: new Map(),
-				};
+			const entry = existing.get(component) ?? {
+				index,
+				component,
+				state: isFinalized(component) ? "settled" : "active",
+				mode: blockMode(component),
+				stableRows: EMPTY_STABLE_ROWS,
+				renderedStableByWidth: new Map(),
+				stableRowCountByWidth: new Map(),
+				emitted: 0,
+				stableFrozen: false,
+				viewportRowsByWidth: new Map(),
+			};
 			entry.index = index;
 			return entry;
 		});

@@ -98,10 +98,10 @@ async function createContext() {
 		set stickyPrompt(mode: StickyPromptPresentation) {
 			stickyPrompt = mode;
 		},
-		page: vi.fn(() => false),
+		page: vi.fn((_direction: -1 | 1) => false),
 		toStart: vi.fn(() => false),
 		toEnd: vi.fn(() => false),
-		scrollTranscriptRows: vi.fn(() => false),
+		scrollTranscriptRows: vi.fn((_rows: number) => false),
 	};
 	const requestRender = vi.fn();
 	const showError = vi.fn();
@@ -1099,7 +1099,6 @@ describe("InputController sticky viewport navigation", () => {
 	});
 });
 describe("InputController global editor actions", () => {
-
 	const CTRL_T = "\x14";
 	const CTRL_R = "\x12";
 	const CTRL_G = "\x07";

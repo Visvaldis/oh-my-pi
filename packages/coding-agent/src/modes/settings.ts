@@ -407,7 +407,8 @@ export const cfgTuiStickyPrompt = register({
 			{
 				value: "terminal",
 				label: "Terminal",
-				description: "Group prompts and responses with OSC 133 in native scrollback; requires terminal support for sticky scroll.",
+				description:
+					"Group prompts and responses with OSC 133 in native scrollback; requires terminal support for sticky scroll.",
 			},
 			{
 				value: "viewport",

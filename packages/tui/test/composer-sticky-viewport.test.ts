@@ -41,7 +41,6 @@ class CountingActiveRows extends Rows {
 	}
 }
 
-
 class ClickableRows extends Rows {
 	getClickFocusAgentIds(): string[] {
 		return ["AgentClick"];
@@ -88,18 +87,28 @@ describe("composer sticky transcript viewport", () => {
 		transcript.addChild(secondResponse);
 		composer.setRuntimeChildren([transcript]);
 		try {
-			const full = transcript.renderScrollableViewport(36, 1000, { now: 0, tick: 0 }, {
-				offsetFromTail: 0,
-				measuredRows: 0,
-				width: 0,
-			});
+			const full = transcript.renderScrollableViewport(
+				36,
+				1000,
+				{ now: 0, tick: 0 },
+				{
+					offsetFromTail: 0,
+					measuredRows: 0,
+					width: 0,
+				},
+			);
 			const firstResponseSpan = full.spans.find(span => span.component === firstResponse)!;
 			const initialOffset = full.cursor.measuredRows - firstResponseSpan.start - 5 - 18;
-			const initialProjection = transcript.renderScrollableViewport(36, 18, { now: 0, tick: 0 }, {
-				offsetFromTail: initialOffset,
-				measuredRows: full.cursor.measuredRows,
-				width: 36,
-			});
+			const initialProjection = transcript.renderScrollableViewport(
+				36,
+				18,
+				{ now: 0, tick: 0 },
+				{
+					offsetFromTail: initialOffset,
+					measuredRows: full.cursor.measuredRows,
+					width: 36,
+				},
+			);
 			expect(initialProjection.prompt).toBe(firstPrompt);
 			expect(initialProjection.promptVisible).toBe(false);
 			composer.renderFrame({ columns: 36, rows: 18 });
@@ -127,16 +136,23 @@ describe("composer sticky transcript viewport", () => {
 		const { composer } = createComposer("viewport", 12);
 		const transcript = new TranscriptContainer();
 		const prompt = new UserMessageComponent("ACTIVE PROMPT");
-		const response = new CountingActiveRows(Array.from({ length: 24 }, (_value, index) => `active response ${index}`));
+		const response = new CountingActiveRows(
+			Array.from({ length: 24 }, (_value, index) => `active response ${index}`),
+		);
 		transcript.addChild(prompt);
 		transcript.addChild(response);
 		composer.setRuntimeChildren([transcript]);
 		try {
-			const full = transcript.renderScrollableViewport(80, 1000, { now: 0, tick: 0 }, {
-				offsetFromTail: 0,
-				measuredRows: 0,
-				width: 0,
-			});
+			const full = transcript.renderScrollableViewport(
+				80,
+				1000,
+				{ now: 0, tick: 0 },
+				{
+					offsetFromTail: 0,
+					measuredRows: 0,
+					width: 0,
+				},
+			);
 			const responseSpan = full.spans.find(span => span.component === response)!;
 			composer.renderFrame({ columns: 80, rows: 12 });
 			composer.toStart();
@@ -213,11 +229,16 @@ describe("composer sticky transcript viewport", () => {
 		const second = addTurn(transcript, "SECOND");
 		composer.setRuntimeChildren([new Rows(["TOP CHROME"]), transcript, new Rows(["BOTTOM CHROME"])]);
 		try {
-			const all = transcript.renderScrollableViewport(80, 1000, { now: 0, tick: 0 }, {
-				offsetFromTail: 0,
-				measuredRows: 0,
-				width: 0,
-			});
+			const all = transcript.renderScrollableViewport(
+				80,
+				1000,
+				{ now: 0, tick: 0 },
+				{
+					offsetFromTail: 0,
+					measuredRows: 0,
+					width: 0,
+				},
+			);
 			const firstResponse = all.spans.find(span => span.component === first.response)!;
 			const secondResponse = all.spans.find(span => span.component === second.response)!;
 			composer.renderFrame({ columns: 80, rows: 12 });
@@ -258,11 +279,16 @@ describe("composer sticky transcript viewport", () => {
 		transcript.addChild(response);
 		composer.setRuntimeChildren([new Rows(["FIXED CHROME"]), transcript]);
 		try {
-			const all = transcript.renderScrollableViewport(80, 1000, { now: 0, tick: 0 }, {
-				offsetFromTail: 0,
-				measuredRows: 0,
-				width: 0,
-			});
+			const all = transcript.renderScrollableViewport(
+				80,
+				1000,
+				{ now: 0, tick: 0 },
+				{
+					offsetFromTail: 0,
+					measuredRows: 0,
+					width: 0,
+				},
+			);
 			const responseSpan = all.spans.find(span => span.component === response)!;
 			composer.renderFrame({ columns: 80, rows: 12 });
 			composer.toStart();
@@ -283,11 +309,16 @@ describe("composer sticky transcript viewport", () => {
 		const second = addTurn(transcript, "SECOND");
 		composer.setRuntimeChildren([transcript]);
 		try {
-			const all = transcript.renderScrollableViewport(80, 1000, { now: 0, tick: 0 }, {
-				offsetFromTail: 0,
-				measuredRows: 0,
-				width: 0,
-			});
+			const all = transcript.renderScrollableViewport(
+				80,
+				1000,
+				{ now: 0, tick: 0 },
+				{
+					offsetFromTail: 0,
+					measuredRows: 0,
+					width: 0,
+				},
+			);
 			const promptSpan = all.spans.find(span => span.component === second.prompt)!;
 			composer.renderFrame({ columns: 80, rows: 10 });
 			composer.toStart();
@@ -399,7 +430,9 @@ describe("composer sticky transcript viewport", () => {
 		const transcript = new TranscriptContainer();
 		for (let turn = 0; turn < 3; turn++) {
 			transcript.addChild(new UserMessageComponent(`SHUTDOWN PROMPT ${turn}`, { semanticResponseGrouping: true }));
-			transcript.addChild(new Rows(Array.from({ length: 4 }, (_value, row) => `SHUTDOWN RESPONSE ${turn} ROW ${row}`)));
+			transcript.addChild(
+				new Rows(Array.from({ length: 4 }, (_value, row) => `SHUTDOWN RESPONSE ${turn} ROW ${row}`)),
+			);
 		}
 		composer.setRuntimeChildren([transcript]);
 		composer.ui.renderNow();
@@ -436,7 +469,9 @@ describe("composer sticky transcript viewport", () => {
 		composer.setRuntimeChildren([transcript]);
 		try {
 			const before = composer.renderFrame({ columns: 80, rows: 6 });
-			const beforeLast = [...text(before.viewport).matchAll(/wheel row (\d+)/g)].map(match => Number(match[1])).at(-1);
+			const beforeLast = [...text(before.viewport).matchAll(/wheel row (\d+)/g)]
+				.map(match => Number(match[1]))
+				.at(-1);
 			expect(beforeLast).toBeDefined();
 			expect(composer.scrollTranscriptRows(-3)).toBe(true);
 			const after = composer.renderFrame({ columns: 80, rows: 6 });
@@ -537,11 +572,16 @@ describe("composer sticky transcript viewport", () => {
 		transcript.addChild(response);
 		composer.setRuntimeChildren([transcript]);
 		try {
-			const all = transcript.renderScrollableViewport(80, 1000, { now: 0, tick: 0 }, {
-				offsetFromTail: 0,
-				measuredRows: 0,
-				width: 0,
-			});
+			const all = transcript.renderScrollableViewport(
+				80,
+				1000,
+				{ now: 0, tick: 0 },
+				{
+					offsetFromTail: 0,
+					measuredRows: 0,
+					width: 0,
+				},
+			);
 			const responseSpan = all.spans.find(span => span.component === response)!;
 			composer.renderFrame({ columns: 80, rows: 9 });
 			composer.toStart();
@@ -567,11 +607,16 @@ describe("composer sticky transcript viewport", () => {
 		transcript.addChild(response);
 		composer.setRuntimeChildren([transcript]);
 		try {
-			const all = transcript.renderScrollableViewport(80, 1000, { now: 0, tick: 0 }, {
-				offsetFromTail: 0,
-				measuredRows: 0,
-				width: 0,
-			});
+			const all = transcript.renderScrollableViewport(
+				80,
+				1000,
+				{ now: 0, tick: 0 },
+				{
+					offsetFromTail: 0,
+					measuredRows: 0,
+					width: 0,
+				},
+			);
 			const responseSpan = all.spans.find(span => span.component === response)!;
 			composer.renderFrame({ columns: 80, rows: 10 });
 			composer.toStart();

@@ -125,9 +125,7 @@ describe("inline click-to-focus geometry", () => {
 			await mode.init({ suppressWelcomeIntro: true });
 			void mode.getUserInput();
 			await term.waitForRender();
-			expect(
-				write.mock.calls.some(([data]) => data.includes("\x1b[?1000h\x1b[?1003h\x1b[?1006h")),
-			).toBe(true);
+			expect(write.mock.calls.some(([data]) => data.includes("\x1b[?1000h\x1b[?1003h\x1b[?1006h"))).toBe(true);
 		} finally {
 			write.mockRestore();
 		}

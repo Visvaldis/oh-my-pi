@@ -1,5 +1,6 @@
 import { getComposerStyle } from "../components/composer/registry";
 import { Spacer } from "../components/spacer";
+import { UserMessageComponent } from "../chat/user-message";
 import type { StatusLineComponent } from "../status-line/component";
 import type { StatusLineSession } from "../status-line/host";
 import { createStartupStatusLine, type StatusLineStartupData } from "../status-line/startup";
@@ -411,7 +412,9 @@ export class Composer implements TerminalFrameProvider, NativeSurfaceProvider {
 			// one open frame renders each of them once for both.
 			transcript.beginFrame(frame);
 		}
-		const history = viewportMode ? undefined : this.#offerHistory(transcript, width, rows, preRoots.length + belowFloor);
+		const history = viewportMode
+			? undefined
+			: this.#offerHistory(transcript, width, rows, preRoots.length + belowFloor);
 		const headerVisible = !this.#headerRetired && this.#offeredHistory?.source !== "header";
 		const headerRows = headerVisible ? this.#header.render(width) : [];
 		const before = [...headerRows, ...preRoots];
@@ -475,9 +478,7 @@ export class Composer implements TerminalFrameProvider, NativeSurfaceProvider {
 		const stickyRowLimit = Math.min(4, Math.max(1, Math.floor(availableRows / 3)));
 		const renderPromptRows = (prompt: UserMessageComponent, maxRows: number): readonly string[] => {
 			if (maxRows !== 1) return prompt.renderStickyPrompt(width, maxRows);
-			const contentRow = prompt
-				.renderStickyPrompt(width, 2)
-				.find(row => Bun.stripANSI(row).trim().length > 0);
+			const contentRow = prompt.renderStickyPrompt(width, 2).find(row => Bun.stripANSI(row).trim().length > 0);
 			return contentRow === undefined ? [] : [contentRow];
 		};
 		const selectPrompt = (projection: ScrollableTranscriptProjection, maxRows = stickyRowLimit) => {
@@ -500,7 +501,7 @@ export class Composer implements TerminalFrameProvider, NativeSurfaceProvider {
 					reservedRows: number;
 					prompt: UserMessageComponent;
 					rows: readonly string[];
-			}
+			  }
 			| undefined;
 		const seenSelections: Array<{
 			prompt: UserMessageComponent | undefined;
@@ -525,13 +526,7 @@ export class Composer implements TerminalFrameProvider, NativeSurfaceProvider {
 			});
 			reservedRows = stickyPrompt.rows.length;
 			projectionCapacity = Math.max(0, availableRows - reservedRows);
-			projection = transcript.renderScrollableViewport(
-				width,
-				projectionCapacity,
-				frame,
-				cursor,
-				projectionContext,
-			);
+			projection = transcript.renderScrollableViewport(width, projectionCapacity, frame, cursor, projectionContext);
 			stickyPrompt = selectPrompt(projection);
 			if (reservedRows > 0 && stickyPrompt.prompt !== undefined) {
 				const rows = renderPromptRows(stickyPrompt.prompt, reservedRows);
@@ -1039,10 +1034,7 @@ export class Composer implements TerminalFrameProvider, NativeSurfaceProvider {
 	toStart(): boolean {
 		if (this.#preferences.stickyPrompt !== "viewport") return false;
 		if (this.#transcriptStartRequested) return true;
-		if (
-			this.#transcriptMaxOffsetExact &&
-			this.#transcriptCursor.offsetFromTail >= this.#transcriptMaxOffset
-		) {
+		if (this.#transcriptMaxOffsetExact && this.#transcriptCursor.offsetFromTail >= this.#transcriptMaxOffset) {
 			return false;
 		}
 		this.#transcriptStartRequested = true;
@@ -1061,7 +1053,6 @@ export class Composer implements TerminalFrameProvider, NativeSurfaceProvider {
 		this.ui.requestRender();
 		return true;
 	}
-
 
 	/** Whether this composer already owns the terminal render/input loop. */
 	get started(): boolean {

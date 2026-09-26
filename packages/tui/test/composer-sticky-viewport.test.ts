@@ -381,6 +381,54 @@ describe("composer sticky transcript viewport", () => {
 		}
 	});
 
+	it("flushes each archived semantic turn exactly once into native shell history on shutdown", () => {
+		const terminal = new VirtualTerminal(80, 4);
+		const acceptedHistoryBatches: string[][] = [];
+		const composer = new Composer({
+			terminal,
+			preferences: { ...COMPOSER_DEFAULTS, quiet: true, stickyPrompt: "viewport" },
+			tuiOptions: {
+				onPaint: paint => {
+					if (paint.history.length > 0) acceptedHistoryBatches.push([...paint.history]);
+				},
+			},
+		});
+		composer.setHeaderExtras([new Rows(["SHUTDOWN HEADER"])], []);
+		composer.start({ playWelcomeIntro: false });
+
+		const transcript = new TranscriptContainer();
+		for (let turn = 0; turn < 3; turn++) {
+			transcript.addChild(new UserMessageComponent(`SHUTDOWN PROMPT ${turn}`, { semanticResponseGrouping: true }));
+			transcript.addChild(new Rows(Array.from({ length: 4 }, (_value, row) => `SHUTDOWN RESPONSE ${turn} ROW ${row}`)));
+		}
+		composer.setRuntimeChildren([transcript]);
+		composer.ui.renderNow();
+		expect(transcript.blockStates()).toEqual(Array.from({ length: 6 }, () => "archived"));
+		expect(acceptedHistoryBatches).toHaveLength(0);
+
+		composer.stop();
+		expect(transcript.blockStates()).toEqual(Array.from({ length: 6 }, () => "committed"));
+		expect(acceptedHistoryBatches).toHaveLength(2);
+
+		const accepted = acceptedHistoryBatches.flat().join("\n");
+		for (const marker of ["A", "B", "C", "D;0"]) {
+			expect(accepted.split(`\x1b]133;${marker}\x07`).length - 1).toBe(3);
+		}
+		const shellTranscript = Bun.stripANSI(terminal.getScrollBuffer().join("\n"));
+		const expectedRows = ["SHUTDOWN HEADER"];
+		for (let turn = 0; turn < 3; turn++) {
+			expectedRows.push(`SHUTDOWN PROMPT ${turn}`);
+			for (let row = 0; row < 4; row++) expectedRows.push(`SHUTDOWN RESPONSE ${turn} ROW ${row}`);
+		}
+		let previousRow = -1;
+		for (const row of expectedRows) {
+			const rowIndex = shellTranscript.indexOf(row);
+			expect(shellTranscript.split(row).length - 1).toBe(1);
+			expect(rowIndex).toBeGreaterThan(previousRow);
+			previousRow = rowIndex;
+		}
+	});
+
 	it("moves wheel navigation by the requested three transcript rows", () => {
 		const { composer } = createComposer("viewport", 6);
 		const transcript = new TranscriptContainer();
@@ -464,6 +512,7 @@ describe("composer sticky transcript viewport", () => {
 
 			composer.setPreferences({ stickyPrompt: "terminal" });
 			frame = composer.renderFrame({ columns: 80, rows: 6 });
+			expect(frame.history?.rows).toContain("navigation row 0");
 			if (frame.history !== undefined) composer.acknowledgeHistory(frame.history.id);
 			expect(composer.scrollTranscriptRows(-1)).toBe(false);
 			expect(composer.page(-1)).toBe(false);

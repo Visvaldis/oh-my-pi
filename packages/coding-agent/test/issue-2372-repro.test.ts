@@ -4,6 +4,8 @@ import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { EventController } from "@oh-my-pi/pi-coding-agent/modes/controllers/event-controller";
 import { InteractiveMode } from "@oh-my-pi/pi-coding-agent/modes/interactive-mode";
+import { cfgTuiStickyPrompt } from "@oh-my-pi/pi-coding-agent/modes/settings";
+import { UserMessageComponent } from "@oh-my-pi/pi-tui/chat/user-message";
 import { initTheme } from "@oh-my-pi/pi-tui/theme";
 import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import type { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
@@ -228,5 +230,27 @@ describe("issue #2372 pre-streaming chat rebuild preserves optimistic submission
 		expect(mode.editor.getExpandedText()).toBe("first [Image #1]\nlater [Image #2]");
 		expect(mode.editor.pendingImages).toEqual([submittedImage, laterImage]);
 		expect(mode.editor.pendingImageLinks).toEqual(["file:///first.png", "file:///later.png"]);
+	});
+
+	it("switches sticky presentation and rebuilds once without dropping the optimistic prompt", async () => {
+		await mode.init({ suppressWelcomeIntro: true });
+		mode.startPendingSubmission({ text: "optimistic sticky prompt" });
+		expect(mode.optimisticUserMessageSignature).toBe("optimistic sticky prompt\u00000");
+
+		const rebuildChat = vi.spyOn(mode, "rebuildChatFromMessages");
+		const resetDisplay = vi.spyOn(mode.ui, "resetDisplay");
+		const setPreferences = vi.spyOn(mode.composer, "setPreferences");
+		cfgTuiStickyPrompt.set(session.settings, "viewport");
+		await Promise.resolve();
+
+		expect(setPreferences).toHaveBeenCalledTimes(1);
+		expect(setPreferences).toHaveBeenCalledWith(expect.objectContaining({ stickyPrompt: "viewport" }));
+		expect(rebuildChat).toHaveBeenCalledTimes(1);
+		expect(resetDisplay).toHaveBeenCalledTimes(1);
+		expect(mode.optimisticUserMessageSignature).toBe("optimistic sticky prompt\u00000");
+		expect(mode.chatContainer.children).toHaveLength(1);
+		expect(mode.chatContainer.children[0]).toBeInstanceOf(UserMessageComponent);
+		const renderedPrompt = mode.chatContainer.children.flatMap(child => child.render(80)).join("\n");
+		expect(Bun.stripANSI(renderedPrompt)).toContain("optimistic sticky prompt");
 	});
 });

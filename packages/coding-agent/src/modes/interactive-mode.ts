@@ -3430,6 +3430,7 @@ export class InteractiveMode implements InteractiveModeContext {
 				"showHardwareCursor",
 				"tui.maxInlineImages",
 				"tui.resizeScrollback",
+				"tui.stickyPrompt",
 				"tui.imeSafeCursor",
 				"autocompleteMaxVisible",
 				"spelling.typoDetection",

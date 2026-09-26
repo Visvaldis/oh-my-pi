@@ -413,15 +413,28 @@ export class Composer implements TerminalFrameProvider, NativeSurfaceProvider {
 			transcript.beginFrame(frame);
 		}
 		const history = viewportMode
-			? undefined
+			? this.#offerViewportHistory(transcript, width, rows, preRoots.length + belowFloor)
 			: this.#offerHistory(transcript, width, rows, preRoots.length + belowFloor);
+		// Keep finalized entries in the pressure count until the header retires;
+		// archiving them first would make later header checks see only the live tail.
+		if (viewportMode && (this.#headerRetired || this.#offeredHistory?.source === "header")) {
+			transcript.archiveFinalizedForViewport();
+		}
 		const headerVisible = !this.#headerRetired && this.#offeredHistory?.source !== "header";
 		const headerRows = headerVisible ? this.#header.render(width) : [];
 		const before = [...headerRows, ...preRoots];
 		if (viewportMode) {
-			return {
-				viewport: this.#renderScrollableViewportRows(transcript, width, rows, frame, before, after, afterSpans),
-			};
+			const viewportRows = this.#renderScrollableViewportRows(
+				transcript,
+				width,
+				rows,
+				frame,
+				before,
+				after,
+				afterSpans,
+				history !== undefined && this.#offeredHistory?.source === "header" ? history.rows.length : 0,
+			);
+			return { history, viewport: viewportRows };
 		}
 		// The live tail is laid out against the same baseline retirement is
 		// billed against, so its compaction allocator (one row per block, no
@@ -468,6 +481,7 @@ export class Composer implements TerminalFrameProvider, NativeSurfaceProvider {
 		before: readonly string[],
 		after: readonly string[],
 		afterSpans: readonly ViewportClickSpan[],
+		retiredHeaderRows = 0,
 	): string[] {
 		const availableRows = Math.max(0, rows - before.length - after.length);
 		let cursor = this.#transcriptCursor;
@@ -597,6 +611,10 @@ export class Composer implements TerminalFrameProvider, NativeSurfaceProvider {
 			shift(span, before.length + stickyPrompt.rows.length + projection.rows.length - drop);
 		}
 		this.#lastClickSpans = spans;
+		if (retiredHeaderRows > 0) {
+			const visibleHeaderRows = Math.max(0, rows - allRows.length);
+			this.#retiredHeaderStart = Math.max(0, retiredHeaderRows - visibleHeaderRows);
+		}
 		return this.#paintHoverBand(mutable, spans);
 	}
 
@@ -839,6 +857,55 @@ export class Composer implements TerminalFrameProvider, NativeSurfaceProvider {
 		}
 	}
 
+	/** Viewport mode retires the header only; explicit replay and pending offers still flow. */
+	#offerViewportHistory(
+		transcript: TranscriptContainer,
+		width: number,
+		rows: number,
+		chromeRows: number,
+	): { id: number; rows: readonly string[]; kind: "append" | "replay" } | undefined {
+		const offered = this.#reuseOfferedHistory(width);
+		if (offered !== undefined) return offered;
+		if (this.#headerReplayPending) return this.#offerHistory(transcript, width, rows, chromeRows);
+		return this.#offerHeader(transcript, width, rows, chromeRows);
+	}
+
+	#reuseOfferedHistory(width: number): { id: number; rows: readonly string[]; kind: "append" | "replay" } | undefined {
+		const offered = this.#offeredHistory;
+		if (offered === undefined) return undefined;
+		this.#rerenderOfferedHistory(width);
+		return { id: offered.id, rows: offered.rows, kind: offered.kind };
+	}
+
+	#offerHeader(
+		transcript: TranscriptContainer,
+		width: number,
+		rows: number,
+		chromeRows: number,
+	): { id: number; rows: readonly string[]; kind: "append" | "replay" } | undefined {
+		if (this.#headerRetired) return undefined;
+		const welcome = this.#welcome;
+		if (welcome !== undefined && !welcome.isTranscriptBlockFinalized()) return undefined;
+		// Keep the header live viewport chrome until capacity pressure requires it
+		// to retire before the transcript's native history.
+		const renderedHeader = this.#header.render(width);
+		if (renderedHeader.length === 0) {
+			this.#headerRetired = true;
+			this.#retiredHeaderRows = [];
+			return undefined;
+		}
+		// Only the comparison below reads the height, so stop once the viewport budget is exceeded.
+		const liveRows = transcript.liveRowCount(width, Math.max(0, rows - renderedHeader.length - chromeRows));
+		if (!this.#historyFlush && renderedHeader.length + chromeRows + liveRows <= rows) return undefined;
+		this.#offeredHistory = {
+			id: this.#nextHistoryId++,
+			rows: [...renderedHeader, ""],
+			kind: "append",
+			source: "header",
+		};
+		return { id: this.#offeredHistory.id, rows: this.#offeredHistory.rows, kind: this.#offeredHistory.kind };
+	}
+
 	/** Header retires first; replay coalesces it with the complete transcript ledger. */
 	#offerHistory(
 		transcript: TranscriptContainer,
@@ -846,14 +913,8 @@ export class Composer implements TerminalFrameProvider, NativeSurfaceProvider {
 		rows: number,
 		chromeRows: number,
 	): { id: number; rows: readonly string[]; kind: "append" | "replay" } | undefined {
-		if (this.#offeredHistory !== undefined) {
-			this.#rerenderOfferedHistory(width);
-			return {
-				id: this.#offeredHistory.id,
-				rows: this.#offeredHistory.rows,
-				kind: this.#offeredHistory.kind,
-			};
-		}
+		const offered = this.#reuseOfferedHistory(width);
+		if (offered !== undefined) return offered;
 		if (this.#headerReplayPending) {
 			const transcriptReplay = transcript.peekReplayBatch(width);
 			// A replay follows a scrollback clear, so the header recomposes at
@@ -879,32 +940,8 @@ export class Composer implements TerminalFrameProvider, NativeSurfaceProvider {
 				kind: this.#offeredHistory.kind,
 			};
 		}
-		if (!this.#headerRetired) {
-			const welcome = this.#welcome;
-			if (welcome !== undefined && !welcome.isTranscriptBlockFinalized()) return undefined;
-			// The header stays live viewport chrome until the screen fills; then it
-			// retires first so transcript prefixes can follow in order.
-			const renderedHeader = this.#header.render(width);
-			if (renderedHeader.length > 0) {
-				// Only the comparison below reads the height, so the walk stops at
-				// the budget instead of rendering every replayed block (#12933).
-				const liveRows = transcript.liveRowCount(width, Math.max(0, rows - renderedHeader.length - chromeRows));
-				if (!this.#historyFlush && renderedHeader.length + chromeRows + liveRows <= rows) return undefined;
-				this.#offeredHistory = {
-					id: this.#nextHistoryId++,
-					rows: [...renderedHeader, ""],
-					kind: "append",
-					source: "header",
-				};
-				return {
-					id: this.#offeredHistory.id,
-					rows: this.#offeredHistory.rows,
-					kind: this.#offeredHistory.kind,
-				};
-			}
-			this.#headerRetired = true;
-			this.#retiredHeaderRows = [];
-		}
+		const headerOffer = this.#offerHeader(transcript, width, rows, chromeRows);
+		if (headerOffer !== undefined) return headerOffer;
 		const batch = this.#historyFlush
 			? transcript.peekFlushBatch(width)
 			: transcript.peekFinalizedBatch(width, Math.max(0, rows - chromeRows));

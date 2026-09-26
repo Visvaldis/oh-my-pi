@@ -150,6 +150,7 @@ export class UserMessageComponent extends Container implements ReactionTarget {
 	readonly initiatesResponseTurn: boolean;
 	#reaction: string | undefined;
 	#native: NativeNode | undefined;
+	#transcriptBlockPending = false;
 
 	constructor(text: string, options: UserBubbleOptions = {}) {
 		super();
@@ -182,6 +183,20 @@ export class UserMessageComponent extends Container implements ReactionTarget {
 		});
 		markdown.setIgnoreTight(true);
 		this.addChild(markdown);
+	}
+	/** Whether this bubble may retire into native history. */
+	isTranscriptBlockFinalized(): boolean {
+		return !this.#transcriptBlockPending;
+	}
+
+	/** Keep an optimistic user bubble removable until its canonical event arrives. */
+	markTranscriptBlockPending(): void {
+		this.#transcriptBlockPending = true;
+	}
+
+	/** Allow an adopted user bubble to retire after its canonical event arrives. */
+	markTranscriptBlockFinalized(): void {
+		this.#transcriptBlockPending = false;
 	}
 
 	setReaction(emoji: string): void {

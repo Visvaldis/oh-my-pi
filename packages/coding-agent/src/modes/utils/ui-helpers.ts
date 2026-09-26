@@ -117,6 +117,8 @@ type QueuedMessages = {
 type AddMessageOptions = {
 	imageLinks?: readonly (string | undefined)[];
 	reuseSettledComponent?: boolean;
+	/** Keep a new user bubble live and replaceable until its canonical event arrives. */
+	pendingTranscriptBlock?: boolean;
 };
 
 function imageLinksForMessage(
@@ -305,6 +307,7 @@ export class UiHelpers {
 						});
 						this.ctx.transcriptMessageComponents.set(message, userComponent);
 					}
+					if (options?.pendingTranscriptBlock) userComponent.markTranscriptBlockPending();
 					this.ctx.chatContainer.addChild(userComponent);
 				}
 				break;

@@ -368,7 +368,7 @@ export interface InteractiveModeContext {
 	 * delivery error should leave the signature set untouched.
 	 */
 	withLocalSubmission<T>(text: string, fn: () => Promise<T>, options?: { imageCount?: number }): Promise<T>;
-	/** Clears bookkeeping for an optimistic local user message once the matching session event arrives. */
+	/** Stops tracking an optimistic user bubble and finalizes it if still mounted. */
 	clearOptimisticUserMessage(): void;
 	/** Replaces the raw optimistic user render with the canonical message emitted by the session. */
 	replaceOptimisticUserMessage(

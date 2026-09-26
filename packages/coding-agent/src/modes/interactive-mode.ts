@@ -237,6 +237,7 @@ import { PlanSaveOverlay, type PlanSaveOverlayResult } from "@oh-my-pi/pi-tui/ov
 import { ServedModelTracker } from "@oh-my-pi/pi-tui/chat/served-model-marker";
 import { SessionInfoOverlay } from "@oh-my-pi/pi-tui/overlays/session-info-overlay";
 import { SkillMessageComponent } from "@oh-my-pi/pi-tui/chat/skill-message";
+import { UserMessageComponent } from "@oh-my-pi/pi-tui/chat/user-message";
 import { StatusLineComponent } from "@oh-my-pi/pi-tui/status-line";
 import { statusLineHost } from "./status-line-host";
 import { stopSharedSpinnerTicker, type ToolExecutionHandle } from "@oh-my-pi/pi-tui/chat/tool-execution";
@@ -3140,6 +3141,9 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.optimisticUserMessageSignature = undefined;
 		this.#pendingSubmissionDispose?.();
 		this.#pendingSubmissionDispose = undefined;
+		for (const component of this.#optimisticUserMessageComponents) {
+			if (component instanceof UserMessageComponent) component.markTranscriptBlockFinalized();
+		}
 		this.#optimisticUserMessageComponents = [];
 	}
 
@@ -3268,7 +3272,7 @@ export class InteractiveMode implements InteractiveModeContext {
 						attribution: "user",
 						timestamp: Date.now(),
 					},
-					{ imageLinks: input.imageLinks },
+					{ imageLinks: input.imageLinks, pendingTranscriptBlock: true },
 				);
 			});
 		} else {
@@ -3365,21 +3369,19 @@ export class InteractiveMode implements InteractiveModeContext {
 
 	finishPendingSubmission(input: SubmittedUserInput): void {
 		const wasPendingSubmission = this.#pendingSubmittedInput === input;
-		const pendingSubmissionDispose = this.#pendingSubmissionDispose;
 		if (wasPendingSubmission) {
 			this.#pendingSubmittedInput = undefined;
-			this.#pendingSubmissionDispose = undefined;
 			this.#pendingSubmissionPreservesDraft = false;
 		}
 
 		if (wasPendingSubmission && !this.session.isStreaming && !this.streamingComponent) {
-			this.optimisticUserMessageSignature = undefined;
-			pendingSubmissionDispose?.();
-			this.#optimisticUserMessageComponents = [];
+			this.clearOptimisticUserMessage();
 			this.#pendingWorkingMessage = undefined;
 			if (this.loadingAnimation) {
 				this.#stopLoadingAnimation(true);
 			}
+		} else if (wasPendingSubmission) {
+			this.#pendingSubmissionDispose = undefined;
 		}
 	}
 
@@ -3849,7 +3851,7 @@ export class InteractiveMode implements InteractiveModeContext {
 					attribution: "user",
 					timestamp: Date.now(),
 				},
-				{ imageLinks: submission.imageLinks },
+				{ imageLinks: submission.imageLinks, pendingTranscriptBlock: true },
 			);
 		});
 	}
@@ -7400,6 +7402,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		options?: {
 			imageLinks?: readonly (string | undefined)[];
 			reuseSettledComponent?: boolean;
+			pendingTranscriptBlock?: boolean;
 		},
 	): Component[] {
 		return this.#uiHelpers.addMessageToChat(message, options);

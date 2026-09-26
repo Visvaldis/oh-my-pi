@@ -412,6 +412,118 @@ describe("composer sticky transcript viewport", () => {
 		}
 	});
 
+	it("retires the startup header under viewport pressure and flushes the full transcript", () => {
+		const terminal = new VirtualTerminal(80, 3);
+		const acceptedHistoryBatches: string[][] = [];
+		const composer = new Composer({
+			terminal,
+			preferences: { ...COMPOSER_DEFAULTS, quiet: false, stickyPrompt: "viewport" },
+			tuiOptions: {
+				onPaint: paint => {
+					if (paint.history.length > 0) acceptedHistoryBatches.push([...paint.history]);
+				},
+			},
+		});
+		composer.setHeaderExtras([new Rows(["VIEWPORT STARTUP HEADER"])], []);
+		composer.start({ playWelcomeIntro: false });
+
+		const transcript = new TranscriptContainer();
+		transcript.addChild(
+			new Rows(["viewport transcript row 0", "viewport transcript row 1", "viewport transcript row 2"]),
+		);
+		composer.setRuntimeChildren([transcript]);
+		composer.ui.renderNow();
+
+		const history = acceptedHistoryBatches.flat();
+		expect(history).toContain("VIEWPORT STARTUP HEADER");
+		expect(history).not.toContain("viewport transcript row 0");
+		expect(transcript.blockStates()).toEqual(["archived"]);
+		const viewport = text(terminal.getViewport());
+		for (let row = 0; row < 3; row++) expect(viewport).toContain(`viewport transcript row ${row}`);
+
+		const resizedViewport = text(composer.renderResizeFrame({ columns: 80, rows: 80 }));
+		expect(resizedViewport).toContain("VIEWPORT STARTUP HEADER");
+		composer.stop();
+		const shellTranscript = Bun.stripANSI(terminal.getScrollBuffer().join("\n"));
+		const expectedRows = [
+			"VIEWPORT STARTUP HEADER",
+			"viewport transcript row 0",
+			"viewport transcript row 1",
+			"viewport transcript row 2",
+		];
+		let previousRow = -1;
+		for (const row of expectedRows) {
+			const rowIndex = shellTranscript.indexOf(row);
+			expect(shellTranscript.split(row).length - 1).toBe(1);
+			expect(rowIndex).toBeGreaterThan(previousRow);
+			previousRow = rowIndex;
+		}
+	});
+
+	it("counts settled viewport rows when later output pressures the startup header", () => {
+		const acceptedHistoryBatches: string[][] = [];
+		const composer = new Composer({
+			terminal: new VirtualTerminal(80, 4),
+			preferences: { ...COMPOSER_DEFAULTS, quiet: true, stickyPrompt: "viewport" },
+			tuiOptions: {
+				onPaint: paint => {
+					if (paint.history.length > 0) acceptedHistoryBatches.push([...paint.history]);
+				},
+			},
+		});
+		composer.setHeaderExtras([new Rows(["CUMULATIVE HEADER"])], []);
+		composer.start({ playWelcomeIntro: false });
+		const transcript = new TranscriptContainer();
+		transcript.addChild(new Rows(["cumulative row 0"]));
+		composer.setRuntimeChildren([transcript]);
+		try {
+			composer.ui.renderNow();
+			expect(acceptedHistoryBatches).toHaveLength(0);
+			expect(transcript.blockStates()).toEqual(["settled"]);
+
+			transcript.addChild(new Rows(["cumulative row 1"]));
+			transcript.addChild(new Rows(["cumulative row 2"]));
+			composer.ui.renderNow();
+			expect(acceptedHistoryBatches.flat()).toContain("CUMULATIVE HEADER");
+			expect(transcript.blockStates()).toEqual(["archived", "archived", "archived"]);
+		} finally {
+			composer.stop();
+		}
+	});
+
+	it("replays a retired header when reset switches terminal history into viewport mode", () => {
+		const terminal = new VirtualTerminal(80, 4);
+		const acceptedHistoryBatches: string[][] = [];
+		const composer = new Composer({
+			terminal,
+			preferences: { ...COMPOSER_DEFAULTS, quiet: true, stickyPrompt: "terminal" },
+			tuiOptions: {
+				onPaint: paint => {
+					if (paint.history.length > 0) acceptedHistoryBatches.push([...paint.history]);
+				},
+			},
+		});
+		composer.setHeaderExtras([new Rows(["RESET TRANSITION HEADER"])], []);
+		composer.start({ playWelcomeIntro: false });
+		const transcript = new TranscriptContainer();
+		for (let row = 0; row < 12; row++) transcript.addChild(new Rows([`reset transition row ${row}`]));
+		composer.setRuntimeChildren([transcript]);
+		for (let frame = 0; frame < 16; frame++) composer.ui.renderNow();
+
+		expect(acceptedHistoryBatches.flat()).toContain("RESET TRANSITION HEADER");
+		expect(transcript.blockStates()).toContain("committed");
+
+		const priorBatchCount = acceptedHistoryBatches.length;
+		composer.setPreferences({ stickyPrompt: "viewport" });
+		composer.ui.resetDisplay();
+		const replay = acceptedHistoryBatches.slice(priorBatchCount).flat();
+
+		expect(replay).toContain("RESET TRANSITION HEADER");
+		expect(replay).toContain("reset transition row 0");
+		expect(transcript.blockStates().some(state => state === "archived" || state === "committed")).toBe(true);
+		composer.stop();
+	});
+
 	it("flushes each archived semantic turn exactly once into native shell history on shutdown", () => {
 		const terminal = new VirtualTerminal(80, 4);
 		const acceptedHistoryBatches: string[][] = [];
@@ -437,7 +549,7 @@ describe("composer sticky transcript viewport", () => {
 		composer.setRuntimeChildren([transcript]);
 		composer.ui.renderNow();
 		expect(transcript.blockStates()).toEqual(Array.from({ length: 6 }, () => "archived"));
-		expect(acceptedHistoryBatches).toHaveLength(0);
+		expect(acceptedHistoryBatches.flat().filter(Boolean)).toEqual(["SHUTDOWN HEADER"]);
 
 		composer.stop();
 		expect(transcript.blockStates()).toEqual(Array.from({ length: 6 }, () => "committed"));

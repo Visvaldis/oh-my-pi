@@ -13,6 +13,27 @@ export interface AnimationFrame {
 	readonly now: number;
 }
 
+/**
+ * Active rows shared by repeated range projections in one Composer frame.
+ * Create one context per frame and discard it before the next render.
+ */
+export class TranscriptProjectionRenderContext {
+	readonly #activeRows = new Map<Component, readonly string[]>();
+
+	constructor(
+		readonly width: number,
+		readonly frame: AnimationFrame,
+	) {}
+
+	getActiveRows(component: Component): readonly string[] | undefined {
+		return this.#activeRows.get(component);
+	}
+
+	cacheActiveRows(component: Component, rows: readonly string[]): void {
+		this.#activeRows.set(component, rows);
+	}
+}
+
 /** Lets an active block adapt its presentation to its allocated viewport rows. */
 export interface TranscriptPresentationTarget {
 	setTranscriptAllocation?(rows: number, frame: AnimationFrame): void;
@@ -294,6 +315,7 @@ export interface ScrollableTranscriptProjection {
 	/** Exact when the prefix is measured; otherwise the next offset can discover more history. */
 	readonly maxOffset: number;
 	readonly prompt?: UserMessageComponent;
+	/** True when non-whitespace text from the initiating prompt is in `rows`. */
 	readonly promptVisible: boolean;
 }
 
@@ -629,11 +651,15 @@ export class TranscriptContainer extends Container {
 		rows: number,
 		frame: AnimationFrame,
 		cursor: TranscriptViewportCursor,
+		context?: TranscriptProjectionRenderContext,
 	): ScrollableTranscriptProjection {
 		this.#syncEntries();
 		this.#lastFrame = frame;
 		const contentWidth = clampScrollableDimension(width, 1);
 		const height = clampScrollableDimension(rows, 0);
+		if (context !== undefined && (context.width !== contentWidth || context.frame !== frame)) {
+			throw new Error("Transcript projection context does not match its frame or width");
+		}
 		const priorWidth = clampScrollableDimension(cursor.width, 1);
 		const priorOffset = clampCursorCount(cursor.offsetFromTail);
 		const priorMeasuredRows = clampCursorCount(cursor.measuredRows);
@@ -649,6 +675,18 @@ export class TranscriptContainer extends Container {
 		}
 		this.#ensureViewportGeometryCapacity(geometry, this.#entries.length);
 		const renderedRows = new Map<number, readonly string[]>();
+		const renderProjectionEntry = (entry: TranscriptEntry, index: number): readonly string[] => {
+			let entryRows = renderedRows.get(index);
+			if (entryRows !== undefined) return entryRows;
+			this.#setAllocation(entry.component, Number.MAX_SAFE_INTEGER, frame);
+			if (entry.state === "active") entryRows = context?.getActiveRows(entry.component);
+			if (entryRows === undefined) {
+				entryRows = this.#renderEntry(entry, contentWidth);
+				if (entry.state === "active") context?.cacheActiveRows(entry.component, entryRows);
+			}
+			renderedRows.set(index, entryRows);
+			return entryRows;
+		};
 
 		// Only a suspended same-width cursor needs row counts for newly appended
 		// entries to preserve its exact tail anchor. Other paths restart discovery
@@ -660,11 +698,11 @@ export class TranscriptContainer extends Container {
 				for (let index = previousEntryCount; index < this.#entries.length; index++) {
 					const entry = this.#entries[index]!;
 					this.#settleViewportEntry(entry);
-					let entryRows = entry.state === "active" ? undefined : this.#getViewportRows(entry, contentWidth);
-					if (entryRows === undefined) {
-						this.#setAllocation(entry.component, Number.MAX_SAFE_INTEGER, frame);
-						entryRows = this.#renderEntry(entry, contentWidth);
-					}
+					let entryRows =
+						entry.state === "active"
+							? renderProjectionEntry(entry, index)
+							: this.#getViewportRows(entry, contentWidth);
+					if (entryRows === undefined) entryRows = renderProjectionEntry(entry, index);
 					this.#setViewportRowCount(geometry, index, entryRows.length);
 					renderedRows.set(index, entryRows);
 					if (entry.state !== "active") this.#cacheViewportRows(entry, contentWidth, entryRows);
@@ -717,17 +755,15 @@ export class TranscriptContainer extends Container {
 			this.#settleViewportEntry(entry);
 			let rowCount = geometry.rowCounts.get(index);
 			if (rowCount === undefined) {
-				let entryRows = entry.state === "active" ? undefined : this.#getViewportRows(entry, contentWidth);
-				let renderedNow = false;
-				if (entryRows === undefined) {
-					this.#setAllocation(entry.component, Number.MAX_SAFE_INTEGER, frame);
-					entryRows = this.#renderEntry(entry, contentWidth);
-					renderedNow = true;
-				}
+				let entryRows =
+					entry.state === "active"
+						? renderProjectionEntry(entry, index)
+						: this.#getViewportRows(entry, contentWidth);
+				if (entryRows === undefined) entryRows = renderProjectionEntry(entry, index);
 				rowCount = entryRows.length;
 				this.#setViewportRowCount(geometry, index, rowCount);
 				if (entry.state !== "active") this.#cacheViewportRows(entry, contentWidth, entryRows);
-				if (renderedNow) renderedRows.set(index, entryRows);
+				renderedRows.set(index, entryRows);
 			} else {
 				geometry.startIndex = index;
 				geometry.rowCount = this.#viewportRowsBetween(geometry, index, geometry.entryCount);
@@ -779,12 +815,7 @@ export class TranscriptContainer extends Container {
 				const earlierNonempty = this.#viewportNonEmptyBetween(geometry, geometry.startIndex, index);
 				const rowStart = prefixRows + (rowCount > 0 && earlierNonempty > 0 ? 1 : 0);
 				const beforeWindow = rowStart + rowCount <= window.windowStart;
-				let entryRows = renderedRows.get(index);
-				if (entryRows === undefined) {
-					this.#setAllocation(entry.component, Number.MAX_SAFE_INTEGER, frame);
-					entryRows = this.#renderEntry(entry, contentWidth);
-					renderedRows.set(index, entryRows);
-				}
+				const entryRows = renderProjectionEntry(entry, index);
 				const priorTotal = geometry.rowCount;
 				const delta = this.#setViewportRowCount(geometry, index, entryRows.length);
 				if (entry.state !== "active") this.#cacheViewportRows(entry, contentWidth, entryRows);
@@ -858,10 +889,8 @@ export class TranscriptContainer extends Container {
 					this.#settleViewportEntry(entry);
 					let entryRows = renderedRows.get(index);
 					if (entryRows === undefined) {
-						this.#setAllocation(entry.component, Number.MAX_SAFE_INTEGER, frame);
 						const priorTotal = geometry.rowCount;
-						entryRows = this.#renderEntry(entry, contentWidth);
-						renderedRows.set(index, entryRows);
+						entryRows = renderProjectionEntry(entry, index);
 						const delta = this.#setViewportRowCount(geometry, index, entryRows.length);
 						if (delta !== 0) {
 							visibleGrowth += delta;
@@ -897,13 +926,15 @@ export class TranscriptContainer extends Container {
 			if (visibleStart < visibleEnd) {
 				const entryRows = renderedRows.get(index);
 				if (entryRows === undefined) throw new Error("Visible transcript rows were not materialized");
+				if (prompt === undefined && entry.turnPrompt !== undefined) prompt = entry.turnPrompt;
+				const selectedPrompt = prompt !== undefined && entry.component === prompt;
 				const spanStart = projectedRows.length;
 				for (let rowIndex = visibleStart; rowIndex < visibleEnd; rowIndex++) {
-					projectedRows.push(entryRows[rowIndex - rowStart]!);
+					const row = entryRows[rowIndex - rowStart]!;
+					projectedRows.push(row);
+					if (selectedPrompt && Bun.stripANSI(row).trim().length > 0) promptVisible = true;
 				}
 				spans.push({ component: entry.component, start: spanStart, end: projectedRows.length });
-				if (prompt === undefined && entry.turnPrompt !== undefined) prompt = entry.turnPrompt;
-				if (prompt !== undefined && entry.component === prompt) promptVisible = true;
 			}
 			index = this.#nextViewportNonEmptyIndex(geometry, index + 1, selected.end);
 		}

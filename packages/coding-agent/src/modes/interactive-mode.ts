@@ -3382,6 +3382,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	/** Live-setting composer preferences; `quiet` is startup-only and `composerShape` flows through {@link syncComposerShape}. */
 	#liveComposerPreferences(): Omit<ComposerPreferences, "quiet" | "composerShape"> {
 		return {
+			stickyPrompt: cfgTuiStickyPrompt.get(this.settings),
 			showHardwareCursor: cfgShowHardwareCursor.get(this.settings),
 			maxInlineImages: cfgTuiMaxInlineImages.get(this.settings),
 			resizeScrollback: cfgTuiResizeScrollback.get(this.settings),

@@ -984,9 +984,33 @@ describe("TranscriptContainer scrollable viewport projection", () => {
 		const promptSpan = full.spans.find(span => span.component === secondPrompt);
 		if (!promptSpan) throw new Error("Expected the second prompt span");
 
-		const promptWindow = projectionAtRow(transcript, 80, full.cursor.measuredRows, promptSpan.start);
+		const promptTextRow = full.rows.findIndex(
+			(row, rowIndex) => rowIndex >= promptSpan.start && rowIndex < promptSpan.end && Bun.stripANSI(row).trim().length > 0,
+		);
+		if (promptTextRow < 0) throw new Error("Expected a visible prompt text row");
+		const promptWindow = projectionAtRow(transcript, 80, full.cursor.measuredRows, promptTextRow);
 		expect(promptWindow.prompt).toBe(secondPrompt);
 		expect(promptWindow.promptVisible).toBe(true);
+	});
+
+	it("does not treat bubble padding alone as visible prompt text", () => {
+		const transcript = new TranscriptContainer();
+		const prompt = new UserMessageComponent("prompt text");
+		transcript.addChild(prompt);
+		transcript.addChild(new Block(["response row"], true));
+		const full = transcript.renderScrollableViewport(80, 100, frame, cursor(0, 0, 80));
+		const promptSpan = full.spans.find(span => span.component === prompt);
+		if (!promptSpan) throw new Error("Expected the prompt span");
+		const paddingRow = promptSpan.end - 1;
+		expect(Bun.stripANSI(full.rows[paddingRow] ?? "").trim()).toBe("");
+		const paddingWindow = transcript.renderScrollableViewport(
+			80,
+			1,
+			frame,
+			cursor(full.cursor.measuredRows - promptSpan.end, full.cursor.measuredRows, 80),
+		);
+		expect(paddingWindow.prompt).toBe(prompt);
+		expect(paddingWindow.promptVisible).toBe(false);
 	});
 
 	it("refreshes a visible historical prompt row after its reaction changes", () => {

@@ -5,6 +5,7 @@ import { col } from "../native/describe";
 import type { NativeNode } from "../native/node";
 import { isNativeSettled, settleNative } from "../native/settle";
 import { isToolActivityComponent } from "./tool-activity";
+import { UserMessageComponent } from "../chat/user-message";
 
 /** Shared animation time supplied by the constrained transcript root. */
 export interface AnimationFrame {
@@ -62,12 +63,14 @@ interface FinalizableBlock {
 /**
  * Block lifecycle:
  * - `active`: still mutating; renders live and counts against tool admission.
- * - `settled`: finalized but retained in the mutable viewport until pressure.
- * - `committed`: logically retired; replay never rewinds this state.
+ * - `settled`: finalized and eligible for ordered native retirement.
+ * - `archived`: finalized for viewport projection, not native history.
+ * - `committed`: acknowledged native history; replay never rewinds this state.
  */
-type BlockState = "active" | "settled" | "committed";
+type BlockState = "active" | "settled" | "archived" | "committed";
 
 interface TranscriptEntry {
+	index: number;
 	component: Component;
 	state: BlockState;
 	mode: TranscriptBlockMode;
@@ -88,6 +91,31 @@ interface TranscriptEntry {
 	 * state for emitted-row slicing but never emits another mid-stream row.
 	 */
 	stableFrozen: boolean;
+	/** Initiating user prompt inherited by this entry, including its own prompt bubble. */
+	turnPrompt?: UserMessageComponent;
+	/** Stable historical rows, memoized for a small number of width epochs. */
+	viewportRowsByWidth: Map<number, readonly string[]>;
+}
+interface ViewportGeometryNode {
+	left?: ViewportGeometryNode;
+	right?: ViewportGeometryNode;
+	rowCount: number;
+	nonemptyCount: number;
+	knownCount: number;
+}
+
+interface ViewportWidthGeometry {
+	/** Earliest entry in the contiguous suffix with measured row geometry. */
+	startIndex: number;
+	/** Entry count included by this geometry snapshot. */
+	entryCount: number;
+	/** Semantic row count of the measured suffix, including separators. */
+	rowCount: number;
+	/** Indexed tree spans `[0, capacity)` and grows without rebuilding history. */
+	capacity: number;
+	/** Compact counts only for entries whose geometry has been discovered. */
+	rowCounts: Map<number, number>;
+	root?: ViewportGeometryNode;
 }
 
 type RetirementPolicy = "pressure" | "flush";
@@ -116,6 +144,91 @@ const PINNED_FRONTIER_WARN_MS = 30_000;
 const RETIREMENT_BUDGET_MS = 8;
 const EMPTY_ROWS: readonly string[] = [];
 const EMPTY_STABLE_ROWS: readonly TranscriptStableRow[] = [];
+/** Prevent malformed or stale viewport dimensions from driving unbounded layout work. */
+const MAX_SCROLLABLE_DIMENSION = 65_536;
+const MAX_VIEWPORT_CACHE_WIDTHS = 2;
+
+function clampScrollableDimension(value: number, minimum: number): number {
+	if (!Number.isFinite(value)) return minimum;
+	return Math.max(minimum, Math.min(MAX_SCROLLABLE_DIMENSION, Math.trunc(value)));
+}
+
+function clampCursorCount(value: number): number {
+	if (!Number.isFinite(value)) return 0;
+	return Math.max(0, Math.min(Number.MAX_SAFE_INTEGER, Math.trunc(value)));
+}
+function createViewportWidthGeometry(entryCount: number): ViewportWidthGeometry {
+	return {
+		startIndex: entryCount,
+		entryCount,
+		rowCount: 0,
+		capacity: 1,
+		rowCounts: new Map(),
+	};
+}
+
+function setViewportGeometryNode(
+	node: ViewportGeometryNode | undefined,
+	start: number,
+	end: number,
+	index: number,
+	rowCount: number,
+): ViewportGeometryNode | undefined {
+	if (end - start === 1) {
+		return { rowCount, nonemptyCount: rowCount > 0 ? 1 : 0, knownCount: 1 };
+	}
+	const middle = start + Math.floor((end - start) / 2);
+	const current: ViewportGeometryNode = node ?? { rowCount: 0, nonemptyCount: 0, knownCount: 0 };
+	if (index < middle) current.left = setViewportGeometryNode(current.left, start, middle, index, rowCount);
+	else current.right = setViewportGeometryNode(current.right, middle, end, index, rowCount);
+	current.rowCount = (current.left?.rowCount ?? 0) + (current.right?.rowCount ?? 0);
+	current.nonemptyCount = (current.left?.nonemptyCount ?? 0) + (current.right?.nonemptyCount ?? 0);
+	current.knownCount = (current.left?.knownCount ?? 0) + (current.right?.knownCount ?? 0);
+	return current;
+}
+
+function viewportGeometryPrefixRows(
+	node: ViewportGeometryNode | undefined,
+	start: number,
+	end: number,
+	prefixEnd: number,
+): number {
+	if (node === undefined || prefixEnd <= start) return 0;
+	if (end <= prefixEnd) return node.rowCount;
+	const middle = start + Math.floor((end - start) / 2);
+	if (prefixEnd <= middle) return viewportGeometryPrefixRows(node.left, start, middle, prefixEnd);
+	return (
+		(node.left?.rowCount ?? 0) + viewportGeometryPrefixRows(node.right, middle, end, prefixEnd)
+	);
+}
+
+function viewportGeometryPrefixNonempty(
+	node: ViewportGeometryNode | undefined,
+	start: number,
+	end: number,
+	prefixEnd: number,
+): number {
+	if (node === undefined || prefixEnd <= start) return 0;
+	if (end <= prefixEnd) return node.nonemptyCount;
+	const middle = start + Math.floor((end - start) / 2);
+	if (prefixEnd <= middle) return viewportGeometryPrefixNonempty(node.left, start, middle, prefixEnd);
+	return (
+		(node.left?.nonemptyCount ?? 0) + viewportGeometryPrefixNonempty(node.right, middle, end, prefixEnd)
+	);
+}
+
+function viewportGeometryPrefixKnown(
+	node: ViewportGeometryNode | undefined,
+	start: number,
+	end: number,
+	prefixEnd: number,
+): number {
+	if (node === undefined || prefixEnd <= start) return 0;
+	if (end <= prefixEnd) return node.knownCount;
+	const middle = start + Math.floor((end - start) / 2);
+	if (prefixEnd <= middle) return viewportGeometryPrefixKnown(node.left, start, middle, prefixEnd);
+	return (node.left?.knownCount ?? 0) + viewportGeometryPrefixKnown(node.right, middle, end, prefixEnd);
+}
 
 function isFinalized(component: Component): boolean {
 	const block = component as Component & FinalizableBlock;
@@ -165,10 +278,32 @@ export interface TranscriptViewportSpan {
 	end: number;
 }
 
+/** Cursor state for a width-measured scrollable transcript projection. */
+export interface TranscriptViewportCursor {
+	readonly offsetFromTail: number;
+	/** Rows measured in the known contiguous history suffix at the previous projection. */
+	readonly measuredRows: number;
+	readonly width: number;
+}
+
+/** A lazily materialized window over the complete semantic transcript. */
+export interface ScrollableTranscriptProjection {
+	readonly rows: readonly string[];
+	readonly spans: readonly TranscriptViewportSpan[];
+	readonly cursor: TranscriptViewportCursor;
+	/** Exact when the prefix is measured; otherwise the next offset can discover more history. */
+	readonly maxOffset: number;
+	readonly prompt?: UserMessageComponent;
+	readonly promptVisible: boolean;
+}
+
 /** Owns transcript order, live capacity, and ordered immutable retirement. */
 export class TranscriptContainer extends Container {
 	#entries: TranscriptEntry[] = [];
+	#syncedChildrenRevision = this.childrenRevision;
 	#frontier = 0;
+	#archiveFrontier = 0;
+	#activeEntries = new Set<TranscriptEntry>();
 	#nextBatchId = 1;
 	#offered: Offered | undefined;
 	#replayPending = false;
@@ -181,6 +316,10 @@ export class TranscriptContainer extends Container {
 	// retirement: everything behind it stays live and degrades to one-line
 	// allocations. Logs once per pinned episode after a grace period.
 	#pinnedFrontier: { index: number; since: number; logged: boolean } | undefined;
+	/** Bounded per-width geometry for the contiguous discovered history suffix. */
+	#viewportGeometryByWidth = new Map<number, ViewportWidthGeometry>();
+	/** Settled rows whose measured geometry must be refreshed per cached width. */
+	#pendingViewportGeometryRefresh = new Map<number, Set<TranscriptEntry>>();
 	/** Block spans of the last `renderViewport` output, for click hit-testing. */
 	#lastViewportSpans: TranscriptViewportSpan[] = [];
 	/**
@@ -206,9 +345,22 @@ export class TranscriptContainer extends Container {
 	#nativeBlocks: readonly Component[] = [];
 	#nativeNode: NativeNode | undefined;
 	override addChild(component: Component): void {
+		const lastEntry = this.#entries.at(-1);
+		if (this.childrenRevision !== this.#syncedChildrenRevision) this.#syncEntries();
+		else if (
+			this.children.length !== this.#entries.length ||
+			this.children.at(-1) !== lastEntry?.component
+		)
+			this.#syncEntries();
 		if (isToolActivityComponent(component)) component.setToolActivityVisible(this.#toolActivityVisible);
 		super.addChild(component);
-		this.#entries.push({
+		const previousPrompt = this.#entries.at(-1)?.turnPrompt;
+		const turnPrompt =
+			component instanceof UserMessageComponent && component.initiatesResponseTurn === true
+				? component
+				: previousPrompt;
+		const entry: TranscriptEntry = {
+			index: this.#entries.length,
 			component,
 			state: "active",
 			mode: blockMode(component),
@@ -217,7 +369,12 @@ export class TranscriptContainer extends Container {
 			stableRowCountByWidth: new Map(),
 			emitted: 0,
 			stableFrozen: false,
-		});
+			viewportRowsByWidth: new Map(),
+		};
+		if (turnPrompt !== undefined) entry.turnPrompt = turnPrompt;
+		this.#entries.push(entry);
+		this.#syncedChildrenRevision = this.childrenRevision;
+		if (!this.#settleViewportEntry(entry)) this.#activeEntries.add(entry);
 		// Callers may splice a just-added block into place (insert after an
 		// anchor); re-check the whole list once instead of trusting positions.
 		this.#entriesUnverified = true;
@@ -226,7 +383,19 @@ export class TranscriptContainer extends Container {
 	override removeChild(component: Component): void {
 		if (this.children.indexOf(component) < 0 || !this.canRemoveBlock(component)) return;
 		super.removeChild(component);
-		this.#entries = this.#entries.filter(candidate => candidate.component !== component);
+		const removedIndex = this.#entries.findIndex(candidate => candidate.component === component);
+		const removed = this.#entries[removedIndex];
+		if (removed !== undefined) {
+			this.#activeEntries.delete(removed);
+			this.#entries.splice(removedIndex, 1);
+			if (removedIndex < this.#archiveFrontier) this.#archiveFrontier--;
+			for (let index = removedIndex; index < this.#entries.length; index++) this.#entries[index]!.index = index;
+			if (removed.component instanceof UserMessageComponent && removed.component.initiatesResponseTurn === true) {
+				this.#recomputeTurnOwnership(removedIndex);
+			}
+		}
+		this.#syncedChildrenRevision = this.childrenRevision;
+		this.#clearViewportGeometry();
 		this.#frontier = Math.min(this.#frontier, this.#entries.length);
 		this.#childStartRows.delete(component);
 	}
@@ -234,7 +403,11 @@ export class TranscriptContainer extends Container {
 	override clear(): void {
 		super.clear();
 		this.#entries = [];
+		this.#activeEntries.clear();
 		this.#frontier = 0;
+		this.#archiveFrontier = 0;
+		this.#syncedChildrenRevision = this.childrenRevision;
+		this.#clearViewportGeometry();
 		this.#offered = undefined;
 		this.#childStartRows.clear();
 		this.#pinnedFrontier = undefined;
@@ -245,16 +418,20 @@ export class TranscriptContainer extends Container {
 
 	setToolActivityVisible(visible: boolean): void {
 		if (this.#toolActivityVisible === visible) return;
+		this.#syncEntries();
 		this.#toolActivityVisible = visible;
-		for (const child of this.children) {
-			if (isToolActivityComponent(child)) child.setToolActivityVisible(visible);
+		this.#clearViewportGeometry();
+		for (const entry of this.#entries) {
+			if (!isToolActivityComponent(entry.component)) continue;
+			entry.component.setToolActivityVisible(visible);
+			entry.viewportRowsByWidth.clear();
 		}
 		this.invalidate();
 	}
 
 	/**
 	 * Forget the append-only emission ledger — emitted counts, published stable
-	 * rows, per-width render cache, and freeze state — for every block, and ask
+	 * rows, per-width render caches, and freeze state — for every block, and ask
 	 * each append-only block to drop its own published rows. The next replay then
 	 * re-renders each block from its current {@link Component.render}, applying a
 	 * changed presentation (e.g. a thinking-visibility toggle) to rows that were
@@ -266,12 +443,14 @@ export class TranscriptContainer extends Container {
 	 */
 	resetStableEmission(): void {
 		this.#syncEntries();
+		this.#clearViewportGeometry();
 		if (this.#offered?.kind === "append") this.#offered = undefined;
 		for (const entry of this.#entries) {
 			entry.emitted = 0;
 			entry.stableRows = EMPTY_STABLE_ROWS;
 			entry.renderedStableByWidth = new Map();
 			entry.stableRowCountByWidth = new Map();
+			entry.viewportRowsByWidth.clear();
 			entry.stableFrozen = false;
 			if (entry.mode === "appendOnly") {
 				(entry.component as Component & AppendOnlyTranscriptBlock).resetTranscriptStableRows?.();
@@ -285,7 +464,7 @@ export class TranscriptContainer extends Container {
 		const index = this.#entries.findIndex(entry => entry.component === component);
 		if (index < 0) return false;
 		const entry = this.#entries[index]!;
-		if (entry.state === "committed" || entry.emitted > 0) return false;
+		if (entry.state === "committed" || entry.state === "archived" || entry.emitted > 0) return false;
 		if (this.#offered?.kind === "commit" && index < this.#offered.end) return false;
 		if (this.#offered?.kind === "append" && index === this.#offered.entry) return false;
 		return true;
@@ -311,8 +490,47 @@ export class TranscriptContainer extends Container {
 
 	/** Whether visible active capacity and live-block memory permit another admission. */
 	canAdmit(rows: number): boolean {
-		const active = this.#entries.filter(entry => entry.state === "active").length;
-		return Math.max(0, Math.trunc(rows)) > active && this.#liveCount() < MAX_LIVE_BLOCKS;
+		this.#syncEntries();
+		for (const entry of this.#activeEntries) this.#settleViewportEntry(entry);
+		return Math.max(0, Math.trunc(rows)) > this.#activeEntries.size && this.#liveCount() < MAX_LIVE_BLOCKS;
+	}
+
+	/** Settle and archive finalized prefixes without creating terminal history offers. */
+	archiveFinalizedForViewport(): void {
+		this.#syncEntries();
+		if (this.#offered !== undefined) return; // Preserve the unacknowledged native transaction; retry after its acknowledgement.
+		let changed = false;
+		for (const entry of this.#activeEntries) {
+			if (this.#settleViewportEntry(entry)) changed = true;
+		}
+		this.#archiveFrontier = Math.max(this.#archiveFrontier, this.#frontier);
+		while (this.#archiveFrontier < this.#entries.length) {
+			const entry = this.#entries[this.#archiveFrontier]!;
+			if (entry.state === "committed" || entry.state === "archived") {
+				this.#archiveFrontier++;
+				continue;
+			}
+			if (entry.state !== "settled") break;
+			entry.state = "archived";
+			this.#archiveFrontier++;
+			changed = true;
+		}
+		this.#pinnedFrontier = undefined;
+		if (changed) this.invalidate();
+	}
+
+	/** Restore viewport-archived entries to the settled prefix used by native flush. */
+	releaseViewportArchiveForFlush(): void {
+		this.#syncEntries();
+		if (this.#offered !== undefined) return; // Preserve the unacknowledged native transaction; retry after its acknowledgement.
+		for (const entry of this.#entries) {
+			if (entry.state === "archived") entry.state = "settled";
+		}
+		this.#frontier = this.#entries.findIndex(entry => entry.state !== "committed");
+		if (this.#frontier < 0) this.#frontier = this.#entries.length;
+		this.#archiveFrontier = this.#frontier;
+		this.#pinnedFrontier = undefined;
+		this.invalidate();
 	}
 
 	/** Prepares one atomic replay of the committed ledger and an emitted active-head prefix. */
@@ -403,6 +621,300 @@ export class TranscriptContainer extends Container {
 	/** Block spans of the last `renderViewport` output, in output coordinates. Empty when the tail is empty. */
 	getLastViewportSpans(): readonly TranscriptViewportSpan[] {
 		return this.#lastViewportSpans;
+	}
+
+	/** Project a selected window, discovering historical geometry backward from the tail. */
+	renderScrollableViewport(
+		width: number,
+		rows: number,
+		frame: AnimationFrame,
+		cursor: TranscriptViewportCursor,
+	): ScrollableTranscriptProjection {
+		this.#syncEntries();
+		this.#lastFrame = frame;
+		const contentWidth = clampScrollableDimension(width, 1);
+		const height = clampScrollableDimension(rows, 0);
+		const priorWidth = clampScrollableDimension(cursor.width, 1);
+		const priorOffset = clampCursorCount(cursor.offsetFromTail);
+		const priorMeasuredRows = clampCursorCount(cursor.measuredRows);
+		let geometry = this.#getViewportGeometry(contentWidth);
+		let hadGeometry = geometry !== undefined;
+		if (geometry === undefined) {
+			geometry = createViewportWidthGeometry(this.#entries.length);
+			this.#storeViewportGeometry(contentWidth, geometry);
+		} else if (geometry.entryCount > this.#entries.length) {
+			geometry = createViewportWidthGeometry(this.#entries.length);
+			this.#storeViewportGeometry(contentWidth, geometry);
+			hadGeometry = false;
+		}
+		this.#ensureViewportGeometryCapacity(geometry, this.#entries.length);
+		const renderedRows = new Map<number, readonly string[]>();
+
+		// Only a suspended same-width cursor needs row counts for newly appended
+		// entries to preserve its exact tail anchor. Other paths restart discovery
+		// at the tail and retain older indexed geometry without visiting it.
+		if (geometry.entryCount < this.#entries.length) {
+			const previousEntryCount = geometry.entryCount;
+			if (hadGeometry && priorWidth === contentWidth && priorOffset > 0) {
+				geometry.entryCount = this.#entries.length;
+				for (let index = previousEntryCount; index < this.#entries.length; index++) {
+					const entry = this.#entries[index]!;
+					this.#settleViewportEntry(entry);
+					let entryRows = entry.state === "active" ? undefined : this.#getViewportRows(entry, contentWidth);
+					if (entryRows === undefined) {
+						this.#setAllocation(entry.component, Number.MAX_SAFE_INTEGER, frame);
+						entryRows = this.#renderEntry(entry, contentWidth);
+					}
+					this.#setViewportRowCount(geometry, index, entryRows.length);
+					renderedRows.set(index, entryRows);
+					if (entry.state !== "active") this.#cacheViewportRows(entry, contentWidth, entryRows);
+				}
+				geometry.rowCount = this.#viewportRowsBetween(geometry, geometry.startIndex, geometry.entryCount);
+			} else {
+				geometry.startIndex = this.#entries.length;
+				geometry.entryCount = this.#entries.length;
+				geometry.rowCount = 0;
+			}
+		}
+
+		const anchorRows = geometry.rowCount;
+		let visibleGrowth = 0;
+		let requestedOffset = priorOffset;
+		const updateRequestedOffset = (): void => {
+			requestedOffset = priorOffset;
+			if (hadGeometry && priorWidth === contentWidth && priorOffset > 0) {
+				requestedOffset += Math.max(0, anchorRows + visibleGrowth - priorMeasuredRows);
+			}
+			requestedOffset = Math.min(Number.MAX_SAFE_INTEGER, requestedOffset);
+		};
+		updateRequestedOffset();
+		const requestedWindowRows = (): number => Math.min(Number.MAX_SAFE_INTEGER, requestedOffset + height);
+
+		// Discover only enough older entries to cover the requested row distance.
+		// Counts retained from a prior width epoch can reconnect without rendering.
+		while (geometry.startIndex > 0 && geometry.rowCount < requestedWindowRows()) {
+			const targetRows = requestedWindowRows();
+			const knownStart = this.#knownSuffixStart(geometry, geometry.startIndex);
+			if (knownStart < geometry.startIndex) {
+				const knownRows = this.#viewportRowsBetween(geometry, knownStart, geometry.entryCount);
+				let nextStart = knownStart;
+				if (knownRows >= targetRows) {
+					let low = knownStart;
+					let high = geometry.startIndex - 1;
+					while (low < high) {
+						const middle = low + Math.ceil((high - low) / 2);
+						if (this.#viewportRowsBetween(geometry, middle, geometry.entryCount) >= targetRows) low = middle;
+						else high = middle - 1;
+					}
+					nextStart = low;
+				}
+				geometry.startIndex = nextStart;
+				geometry.rowCount = this.#viewportRowsBetween(geometry, nextStart, geometry.entryCount);
+				continue;
+			}
+			const index = geometry.startIndex - 1;
+			const entry = this.#entries[index]!;
+			this.#settleViewportEntry(entry);
+			let rowCount = geometry.rowCounts.get(index);
+			if (rowCount === undefined) {
+				let entryRows = entry.state === "active" ? undefined : this.#getViewportRows(entry, contentWidth);
+				let renderedNow = false;
+				if (entryRows === undefined) {
+					this.#setAllocation(entry.component, Number.MAX_SAFE_INTEGER, frame);
+					entryRows = this.#renderEntry(entry, contentWidth);
+					renderedNow = true;
+				}
+				rowCount = entryRows.length;
+				this.#setViewportRowCount(geometry, index, rowCount);
+				if (entry.state !== "active") this.#cacheViewportRows(entry, contentWidth, entryRows);
+				if (renderedNow) renderedRows.set(index, entryRows);
+			} else {
+				geometry.startIndex = index;
+				geometry.rowCount = this.#viewportRowsBetween(geometry, index, geometry.entryCount);
+			}
+		}
+
+		const layoutWindow = () => {
+			const complete = geometry.startIndex === 0;
+			const maxKnownOffset = Math.max(0, geometry.rowCount - height);
+			const offsetFromTail = complete ? Math.min(requestedOffset, maxKnownOffset) : requestedOffset;
+			const maxOffset = complete
+				? maxKnownOffset
+				: Math.min(Number.MAX_SAFE_INTEGER, Math.max(maxKnownOffset + 1, offsetFromTail));
+			const windowEnd = Math.max(0, geometry.rowCount - offsetFromTail);
+			const windowStart = Math.max(0, windowEnd - Math.min(height, geometry.rowCount));
+			return { offsetFromTail, maxOffset, windowStart, windowEnd };
+		};
+		const findEntryAtRow = (row: number, strict: boolean): number => {
+			let low = geometry.startIndex;
+			let high = geometry.entryCount;
+			while (low < high) {
+				const middle = low + Math.floor((high - low) / 2);
+				const throughMiddle = this.#viewportRowsBetween(geometry, geometry.startIndex, middle + 1);
+				if (strict ? throughMiddle > row : throughMiddle >= row) high = middle;
+				else low = middle + 1;
+			}
+			return low;
+		};
+		const selectedEntries = (window: ReturnType<typeof layoutWindow>) => {
+			if (height === 0 || window.windowStart >= window.windowEnd || geometry.startIndex >= geometry.entryCount) {
+				return { start: geometry.entryCount, end: geometry.entryCount };
+			}
+			const start = findEntryAtRow(window.windowStart, true);
+			const end = Math.min(geometry.entryCount, findEntryAtRow(window.windowEnd, false) + 1);
+			return { start, end };
+		};
+
+		let window = layoutWindow();
+		while (true) {
+			let activeGeometryChanged = false;
+			// Refresh measured active blocks so later seeks see current geometry.
+			// Only growth at or newer than the window edge shifts a suspended cursor.
+			for (const entry of this.#activeEntries) {
+				this.#settleViewportEntry(entry);
+				const index = entry.index;
+				if (index < geometry.startIndex || index >= geometry.entryCount) continue;
+				const rowCount = geometry.rowCounts.get(index) ?? 0;
+				const prefixRows = this.#viewportRowsBetween(geometry, geometry.startIndex, index);
+				const earlierNonempty = this.#viewportNonEmptyBetween(geometry, geometry.startIndex, index);
+				const rowStart = prefixRows + (rowCount > 0 && earlierNonempty > 0 ? 1 : 0);
+				const beforeWindow = rowStart + rowCount <= window.windowStart;
+				let entryRows = renderedRows.get(index);
+				if (entryRows === undefined) {
+					this.#setAllocation(entry.component, Number.MAX_SAFE_INTEGER, frame);
+					entryRows = this.#renderEntry(entry, contentWidth);
+					renderedRows.set(index, entryRows);
+				}
+				const priorTotal = geometry.rowCount;
+				const delta = this.#setViewportRowCount(geometry, index, entryRows.length);
+				if (entry.state !== "active") this.#cacheViewportRows(entry, contentWidth, entryRows);
+				if (delta !== 0) {
+					if (!beforeWindow) {
+						visibleGrowth += delta;
+						updateRequestedOffset();
+					}
+					if (geometry.rowCount !== priorTotal) {
+						activeGeometryChanged = true;
+						window = layoutWindow();
+					}
+				}
+			}
+			if (activeGeometryChanged) {
+				window = layoutWindow();
+				continue;
+			}
+
+			let pendingGeometryChanged = false;
+			const pendingForWidth = this.#pendingViewportGeometryRefresh.get(contentWidth);
+			if (pendingForWidth !== undefined) {
+				for (const entry of pendingForWidth) {
+					const index = entry.index;
+					if (index < geometry.startIndex || index >= geometry.entryCount) continue;
+					const rowCount = geometry.rowCounts.get(index);
+					if (rowCount === undefined) continue;
+					const prefixRows = this.#viewportRowsBetween(geometry, geometry.startIndex, index);
+					const earlierNonempty = this.#viewportNonEmptyBetween(geometry, geometry.startIndex, index);
+					const rowStart = prefixRows + (rowCount > 0 && earlierNonempty > 0 ? 1 : 0);
+					// Refresh earlier rows for future seeks without shifting this suspended window.
+					const beforeWindow = rowStart + rowCount <= window.windowStart;
+					let entryRows = renderedRows.get(index);
+					if (entryRows === undefined) {
+						this.#setAllocation(entry.component, Number.MAX_SAFE_INTEGER, frame);
+						entryRows = this.#renderEntry(entry, contentWidth);
+						renderedRows.set(index, entryRows);
+						const priorTotal = geometry.rowCount;
+						const delta = this.#setViewportRowCount(geometry, index, entryRows.length);
+						if (entry.state !== "active") this.#cacheViewportRows(entry, contentWidth, entryRows);
+						if (delta !== 0) {
+							if (!beforeWindow) {
+								visibleGrowth += delta;
+								updateRequestedOffset();
+							}
+							if (geometry.rowCount !== priorTotal) {
+								pendingGeometryChanged = true;
+								window = layoutWindow();
+							}
+						}
+					}
+					pendingForWidth.delete(entry);
+				}
+				if (pendingForWidth.size === 0) this.#pendingViewportGeometryRefresh.delete(contentWidth);
+			}
+			if (pendingGeometryChanged) {
+				window = layoutWindow();
+				continue;
+			}
+			const selected = selectedEntries(window);
+
+			let visibleGeometryChanged = false;
+			let index = this.#nextViewportNonEmptyIndex(geometry, selected.start, selected.end);
+			while (index < selected.end) {
+				const rowCount = geometry.rowCounts.get(index)!;
+				const prefixRows = this.#viewportRowsBetween(geometry, geometry.startIndex, index);
+				const earlierNonempty = this.#viewportNonEmptyBetween(geometry, geometry.startIndex, index);
+				const rowStart = prefixRows + (earlierNonempty > 0 ? 1 : 0);
+				if (Math.max(window.windowStart, rowStart) < Math.min(window.windowEnd, rowStart + rowCount)) {
+					const entry = this.#entries[index]!;
+					this.#settleViewportEntry(entry);
+					let entryRows = renderedRows.get(index);
+					if (entryRows === undefined) {
+						this.#setAllocation(entry.component, Number.MAX_SAFE_INTEGER, frame);
+						const priorTotal = geometry.rowCount;
+						entryRows = this.#renderEntry(entry, contentWidth);
+						renderedRows.set(index, entryRows);
+						const delta = this.#setViewportRowCount(geometry, index, entryRows.length);
+						if (delta !== 0) {
+							visibleGrowth += delta;
+							updateRequestedOffset();
+							visibleGeometryChanged ||= geometry.rowCount !== priorTotal;
+						}
+						if (entry.state !== "active") this.#cacheViewportRows(entry, contentWidth, entryRows);
+					}
+				}
+				index = this.#nextViewportNonEmptyIndex(geometry, index + 1, selected.end);
+			}
+			if (!visibleGeometryChanged) break;
+			window = layoutWindow();
+		}
+
+		window = layoutWindow();
+		const selected = selectedEntries(window);
+		const projectedRows: string[] = [];
+		const spans: TranscriptViewportSpan[] = [];
+		let prompt: UserMessageComponent | undefined;
+		let promptVisible = false;
+		let index = this.#nextViewportNonEmptyIndex(geometry, selected.start, selected.end);
+		while (index < selected.end) {
+			const entry = this.#entries[index]!;
+			const rowCount = geometry.rowCounts.get(index)!;
+			const prefixRows = this.#viewportRowsBetween(geometry, geometry.startIndex, index);
+			const earlierNonempty = this.#viewportNonEmptyBetween(geometry, geometry.startIndex, index);
+			const separator = earlierNonempty > 0 ? 1 : 0;
+			if (separator > 0 && prefixRows >= window.windowStart && prefixRows < window.windowEnd) projectedRows.push("");
+			const rowStart = prefixRows + separator;
+			const visibleStart = Math.max(window.windowStart, rowStart);
+			const visibleEnd = Math.min(window.windowEnd, rowStart + rowCount);
+			if (visibleStart < visibleEnd) {
+				const entryRows = renderedRows.get(index);
+				if (entryRows === undefined) throw new Error("Visible transcript rows were not materialized");
+				const spanStart = projectedRows.length;
+				for (let rowIndex = visibleStart; rowIndex < visibleEnd; rowIndex++) {
+					projectedRows.push(entryRows[rowIndex - rowStart]!);
+				}
+				spans.push({ component: entry.component, start: spanStart, end: projectedRows.length });
+				if (prompt === undefined && entry.turnPrompt !== undefined) prompt = entry.turnPrompt;
+				if (prompt !== undefined && entry.component === prompt) promptVisible = true;
+			}
+			index = this.#nextViewportNonEmptyIndex(geometry, index + 1, selected.end);
+		}
+		const projectedCursor: TranscriptViewportCursor = {
+			offsetFromTail: window.offsetFromTail,
+			measuredRows: geometry.rowCount,
+			width: contentWidth,
+		};
+		return prompt === undefined
+			? { rows: projectedRows, spans, cursor: projectedCursor, maxOffset: window.maxOffset, promptVisible }
+			: { rows: projectedRows, spans, cursor: projectedCursor, maxOffset: window.maxOffset, prompt, promptVisible };
 	}
 
 	/** Collapse a per-line owner list into run-length block spans, clamped to `length`. */
@@ -571,6 +1083,8 @@ export class TranscriptContainer extends Container {
 
 	/** Offers the complete currently eligible prefix for graceful shutdown. */
 	peekFlushBatch(width: number): HistoryBatch | undefined {
+		// Flush is a one-shot retirement boundary; reconcile the full list before offering rows.
+		this.#syncEntries();
 		return this.#peekBatch(width, 0, "flush");
 	}
 
@@ -727,6 +1241,7 @@ export class TranscriptContainer extends Container {
 				this.#retireEntry(this.#entries[index]!);
 			}
 			this.#frontier = offered.end;
+			this.#archiveFrontier = Math.max(this.#archiveFrontier, this.#frontier);
 		}
 		this.#offered = undefined;
 		if (this.#replayRequested) this.#startReplay();
@@ -804,6 +1319,123 @@ export class TranscriptContainer extends Container {
 	/** Rendered row where a child's block begins in the last full render() (transcript deep-links). */
 	getChildStartRow(child: Component): number | undefined {
 		return this.#childStartRows.get(child);
+	}
+
+	#getViewportGeometry(width: number): ViewportWidthGeometry | undefined {
+		const geometry = this.#viewportGeometryByWidth.get(width);
+		if (geometry === undefined) return undefined;
+		this.#viewportGeometryByWidth.delete(width);
+		this.#viewportGeometryByWidth.set(width, geometry);
+		return geometry;
+	}
+
+	#clearViewportGeometry(): void {
+		this.#viewportGeometryByWidth.clear();
+		this.#pendingViewportGeometryRefresh.clear();
+	}
+
+	#storeViewportGeometry(width: number, geometry: ViewportWidthGeometry): void {
+		this.#viewportGeometryByWidth.delete(width);
+		this.#viewportGeometryByWidth.set(width, geometry);
+		while (this.#viewportGeometryByWidth.size > MAX_VIEWPORT_CACHE_WIDTHS) {
+			const oldestWidth = this.#viewportGeometryByWidth.keys().next().value;
+			if (oldestWidth === undefined) break;
+			this.#viewportGeometryByWidth.delete(oldestWidth);
+			this.#pendingViewportGeometryRefresh.delete(oldestWidth);
+		}
+	}
+
+	#ensureViewportGeometryCapacity(geometry: ViewportWidthGeometry, entryCount: number): void {
+		while (entryCount > geometry.capacity) {
+			const previousRoot = geometry.root;
+			geometry.capacity *= 2;
+			if (previousRoot !== undefined) {
+				geometry.root = {
+					left: previousRoot,
+					rowCount: previousRoot.rowCount,
+					nonemptyCount: previousRoot.nonemptyCount,
+					knownCount: previousRoot.knownCount,
+				};
+			}
+		}
+	}
+
+	#viewportRowsBetween(geometry: ViewportWidthGeometry, start: number, end: number): number {
+		const rows =
+			viewportGeometryPrefixRows(geometry.root, 0, geometry.capacity, end) -
+			viewportGeometryPrefixRows(geometry.root, 0, geometry.capacity, start);
+		const nonempty =
+			viewportGeometryPrefixNonempty(geometry.root, 0, geometry.capacity, end) -
+			viewportGeometryPrefixNonempty(geometry.root, 0, geometry.capacity, start);
+		return Math.min(Number.MAX_SAFE_INTEGER, rows + Math.max(0, nonempty - 1));
+	}
+
+	#viewportNonEmptyBetween(geometry: ViewportWidthGeometry, start: number, end: number): number {
+		return (
+			viewportGeometryPrefixNonempty(geometry.root, 0, geometry.capacity, end) -
+			viewportGeometryPrefixNonempty(geometry.root, 0, geometry.capacity, start)
+		);
+	}
+
+	#viewportKnownBetween(geometry: ViewportWidthGeometry, start: number, end: number): number {
+		return (
+			viewportGeometryPrefixKnown(geometry.root, 0, geometry.capacity, end) -
+			viewportGeometryPrefixKnown(geometry.root, 0, geometry.capacity, start)
+		);
+	}
+
+	#knownSuffixStart(geometry: ViewportWidthGeometry, end: number): number {
+		let low = 0;
+		let high = end;
+		while (low < high) {
+			const middle = low + Math.floor((high - low) / 2);
+			if (this.#viewportKnownBetween(geometry, middle, end) === end - middle) high = middle;
+			else low = middle + 1;
+		}
+		return low;
+	}
+
+	#nextViewportNonEmptyIndex(geometry: ViewportWidthGeometry, start: number, end: number): number {
+		if (start >= end) return end;
+		const nonemptyBefore = this.#viewportNonEmptyBetween(geometry, geometry.startIndex, start);
+		let low = start;
+		let high = end;
+		while (low < high) {
+			const middle = low + Math.floor((high - low) / 2);
+			if (this.#viewportNonEmptyBetween(geometry, geometry.startIndex, middle + 1) > nonemptyBefore) high = middle;
+			else low = middle + 1;
+		}
+		return low;
+	}
+
+	#setViewportRowCount(geometry: ViewportWidthGeometry, index: number, rowCount: number): number {
+		this.#ensureViewportGeometryCapacity(geometry, index + 1);
+		const previous = geometry.rowCounts.get(index);
+		if (geometry.rowCounts.has(index) && previous === rowCount) return 0;
+		const previousTotal = geometry.rowCount;
+		geometry.rowCounts.set(index, rowCount);
+		geometry.root = setViewportGeometryNode(geometry.root, 0, geometry.capacity, index, rowCount);
+		if (index < geometry.startIndex) geometry.startIndex = index;
+		geometry.rowCount = this.#viewportRowsBetween(geometry, geometry.startIndex, geometry.entryCount);
+		return geometry.rowCount - previousTotal;
+	}
+
+	#getViewportRows(entry: TranscriptEntry, width: number): readonly string[] | undefined {
+		const rows = entry.viewportRowsByWidth.get(width);
+		if (rows === undefined) return undefined;
+		entry.viewportRowsByWidth.delete(width);
+		entry.viewportRowsByWidth.set(width, rows);
+		return rows;
+	}
+
+	#cacheViewportRows(entry: TranscriptEntry, width: number, rows: readonly string[]): void {
+		entry.viewportRowsByWidth.delete(width);
+		entry.viewportRowsByWidth.set(width, rows);
+		while (entry.viewportRowsByWidth.size > MAX_VIEWPORT_CACHE_WIDTHS) {
+			const oldestWidth = entry.viewportRowsByWidth.keys().next().value;
+			if (oldestWidth === undefined) break;
+			entry.viewportRowsByWidth.delete(oldestWidth);
+		}
 	}
 
 	#renderEntry(entry: TranscriptEntry, width: number): readonly string[] {
@@ -946,7 +1578,7 @@ export class TranscriptContainer extends Container {
 	 */
 	#notePinnedFrontier(): void {
 		const entry = this.#entries[this.#frontier];
-		if (entry === undefined) return;
+		if (entry === undefined || entry.state === "archived") return;
 		const now = Date.now();
 		if (this.#pinnedFrontier?.index !== this.#frontier) {
 			this.#pinnedFrontier = { index: this.#frontier, since: now, logged: false };
@@ -1023,6 +1655,7 @@ export class TranscriptContainer extends Container {
 			if (this.#renderStablePrefix(entry, entry.emitted, width).length !== rendered.length) return;
 			this.#retireEntry(entry);
 			this.#frontier++;
+			this.#archiveFrontier = Math.max(this.#archiveFrontier, this.#frontier);
 		}
 	}
 
@@ -1148,22 +1781,45 @@ export class TranscriptContainer extends Container {
 		(component as Component & TranscriptPresentationTarget).setTranscriptAllocation?.(rows, frame);
 	}
 
-	#settleFinalized(): void {
-		for (let index = this.#frontier; index < this.#entries.length; index++) {
-			const entry = this.#entries[index]!;
-			if (entry.state === "active" && isFinalized(entry.component)) entry.state = "settled";
+	#settleViewportEntry(entry: TranscriptEntry): boolean {
+		if (entry.state !== "active" || !isFinalized(entry.component)) return false;
+		entry.state = "settled";
+		this.#activeEntries.delete(entry);
+		for (const [width, geometry] of this.#viewportGeometryByWidth) {
+			if (!geometry.rowCounts.has(entry.index)) continue;
+			let pending = this.#pendingViewportGeometryRefresh.get(width);
+			if (pending === undefined) {
+				pending = new Set();
+				this.#pendingViewportGeometryRefresh.set(width, pending);
+			}
+			pending.add(entry);
 		}
+		return true;
+	}
+
+	#settleFinalized(): void {
+		for (const entry of this.#activeEntries) this.#settleViewportEntry(entry);
 	}
 
 	#liveEntries(): Array<{ entry: TranscriptEntry; index: number }> {
-		const start = this.#offered?.kind === "commit" ? this.#offered.end : this.#frontier;
+		const start = Math.max(
+			this.#archiveFrontier,
+			this.#offered?.kind === "commit" ? this.#offered.end : this.#frontier,
+		);
 		const live: Array<{ entry: TranscriptEntry; index: number }> = [];
-		for (let index = start; index < this.#entries.length; index++) live.push({ entry: this.#entries[index]!, index });
+		for (let index = start; index < this.#entries.length; index++) {
+			const entry = this.#entries[index]!;
+			if (entry.state !== "archived") live.push({ entry, index });
+		}
 		return live;
 	}
 
 	#liveCount(): number {
-		return this.#entries.length - this.#frontier;
+		let count = 0;
+		for (let index = Math.max(this.#frontier, this.#archiveFrontier); index < this.#entries.length; index++) {
+			if (this.#entries[index]!.state !== "archived") count++;
+		}
+		return count;
 	}
 
 	/**
@@ -1177,32 +1833,52 @@ export class TranscriptContainer extends Container {
 	 */
 	#syncEntries(): void {
 		const children = this.children;
+		const revision = this.childrenRevision;
 		if (
 			!this.#entriesUnverified &&
 			children === this.#syncedChildren &&
 			this.#entriesMatch(children, this.#frontier)
 		) {
+			this.#syncedChildrenRevision = revision;
 			return;
 		}
 		this.#entriesUnverified = false;
 		this.#syncedChildren = children;
-		if (this.#entriesMatch(children, 0)) return;
+		if (this.#entriesMatch(children, 0)) {
+			this.#syncedChildrenRevision = revision;
+			return;
+		}
+		this.#clearViewportGeometry();
 		const existing = new Map(this.#entries.map(entry => [entry.component, entry]));
-		this.#entries = this.children.map(
-			component =>
-				existing.get(component) ?? {
+		this.#entries = this.children.map((component, index) => {
+			const entry =
+				existing.get(component) ??
+				{
+					index,
 					component,
-					state: "active",
+					state: isFinalized(component) ? "settled" : "active",
 					mode: blockMode(component),
 					stableRows: EMPTY_STABLE_ROWS,
 					renderedStableByWidth: new Map(),
 					stableRowCountByWidth: new Map(),
 					emitted: 0,
 					stableFrozen: false,
-				},
-		);
+					viewportRowsByWidth: new Map(),
+				};
+			entry.index = index;
+			return entry;
+		});
+		this.#activeEntries = new Set(this.#entries.filter(entry => entry.state === "active"));
 		this.#frontier = this.#entries.findIndex(entry => entry.state !== "committed");
 		if (this.#frontier < 0) this.#frontier = this.#entries.length;
+		this.#archiveFrontier = this.#frontier;
+		while (this.#archiveFrontier < this.#entries.length) {
+			const state = this.#entries[this.#archiveFrontier]!.state;
+			if (state !== "committed" && state !== "archived") break;
+			this.#archiveFrontier++;
+		}
+		this.#syncedChildrenRevision = revision;
+		this.#recomputeTurnOwnership();
 	}
 
 	/** Whether `#entries` has `children`'s length and components from `start` on. */
@@ -1213,6 +1889,18 @@ export class TranscriptContainer extends Container {
 			if (entries[index]!.component !== children[index]) return false;
 		}
 		return true;
+	}
+
+	#recomputeTurnOwnership(startIndex: number = 0): void {
+		let turnPrompt = startIndex === 0 ? undefined : this.#entries[startIndex - 1]?.turnPrompt;
+		for (let index = startIndex; index < this.#entries.length; index++) {
+			const entry = this.#entries[index]!;
+			if (entry.component instanceof UserMessageComponent && entry.component.initiatesResponseTurn === true) {
+				turnPrompt = entry.component;
+			}
+			if (turnPrompt === undefined) delete entry.turnPrompt;
+			else entry.turnPrompt = turnPrompt;
+		}
 	}
 }
 

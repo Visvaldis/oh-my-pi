@@ -3177,15 +3177,11 @@ export class InteractiveMode implements InteractiveModeContext {
 	): void {
 		this.clearOptimisticSkillMessage();
 		this.optimisticSkillMessagePending = true;
+		// Mark the row pending before insertion so the transcript never settles it
+		// into immutable history during a slow preflight (issue #11217).
 		this.#optimisticSkillMessageComponents = this.#captureAddedChatComponents(() => {
-			this.addMessageToChat(message, options);
+			this.addMessageToChat(message, { ...options, pendingTranscriptBlock: true });
 		});
-		// Hold the row live (unfinalized) so it stays removable until reconcile,
-		// instead of settling and retiring into immutable scrollback mid-preflight
-		// where reconcile could no longer swap it out (issue #11217).
-		for (const component of this.#optimisticSkillMessageComponents) {
-			if (component instanceof SkillMessageComponent) component.markTranscriptBlockPending();
-		}
 		this.ensureLoadingAnimation();
 		this.ui.requestRender();
 	}

@@ -220,6 +220,7 @@ export class UiHelpers {
 					if (message.customType === SKILL_PROMPT_MESSAGE_TYPE) {
 						const component = new SkillMessageComponent(message as CustomMessage<SkillPromptDetails>);
 						component.setExpanded(this.ctx.toolOutputExpanded);
+						if (options?.pendingTranscriptBlock) component.markTranscriptBlockPending();
 						this.ctx.chatContainer.addChild(component);
 						break;
 					}

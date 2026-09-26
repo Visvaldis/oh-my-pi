@@ -312,8 +312,10 @@ export interface ScrollableTranscriptProjection {
 	readonly rows: readonly string[];
 	readonly spans: readonly TranscriptViewportSpan[];
 	readonly cursor: TranscriptViewportCursor;
-	/** Exact when the prefix is measured; otherwise the next offset can discover more history. */
+	/** Lower bound until projection reaches the transcript start. */
 	readonly maxOffset: number;
+	/** True when maxOffset is exact because the complete prefix is measured. */
+	readonly maxOffsetExact: boolean;
 	readonly prompt?: UserMessageComponent;
 	/** True when non-whitespace text from the initiating prompt is in `rows`. */
 	readonly promptVisible: boolean;
@@ -779,7 +781,7 @@ export class TranscriptContainer extends Container {
 				: Math.min(Number.MAX_SAFE_INTEGER, Math.max(maxKnownOffset + 1, offsetFromTail));
 			const windowEnd = Math.max(0, geometry.rowCount - offsetFromTail);
 			const windowStart = Math.max(0, windowEnd - Math.min(height, geometry.rowCount));
-			return { offsetFromTail, maxOffset, windowStart, windowEnd };
+			return { offsetFromTail, maxOffset, maxOffsetExact: complete, windowStart, windowEnd };
 		};
 		const findEntryAtRow = (row: number, strict: boolean): number => {
 			let low = geometry.startIndex;
@@ -944,8 +946,23 @@ export class TranscriptContainer extends Container {
 			width: contentWidth,
 		};
 		return prompt === undefined
-			? { rows: projectedRows, spans, cursor: projectedCursor, maxOffset: window.maxOffset, promptVisible }
-			: { rows: projectedRows, spans, cursor: projectedCursor, maxOffset: window.maxOffset, prompt, promptVisible };
+			? {
+					rows: projectedRows,
+					spans,
+					cursor: projectedCursor,
+					maxOffset: window.maxOffset,
+					maxOffsetExact: window.maxOffsetExact,
+					promptVisible,
+			  }
+			: {
+					rows: projectedRows,
+					spans,
+					cursor: projectedCursor,
+					maxOffset: window.maxOffset,
+					maxOffsetExact: window.maxOffsetExact,
+					prompt,
+					promptVisible,
+			  };
 	}
 
 	/** Collapse a per-line owner list into run-length block spans, clamped to `length`. */

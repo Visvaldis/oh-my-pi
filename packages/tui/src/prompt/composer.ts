@@ -238,6 +238,7 @@ export class Composer implements TerminalFrameProvider, NativeSurfaceProvider {
 	#transcriptCursor: TranscriptViewportCursor = { offsetFromTail: 0, measuredRows: 0, width: 0 };
 	#transcriptViewportCapacity = 0;
 	#transcriptMaxOffset = 0;
+	#transcriptMaxOffsetExact = false;
 	#transcriptStartRequested = false;
 	#runtimeMounted = false;
 	// Composer-owned history id space. Transcript batch ids restart across
@@ -573,6 +574,7 @@ export class Composer implements TerminalFrameProvider, NativeSurfaceProvider {
 		this.#transcriptCursor = projection.cursor;
 		this.#transcriptViewportCapacity = projectionCapacity;
 		this.#transcriptMaxOffset = projection.maxOffset;
+		this.#transcriptMaxOffsetExact = projection.maxOffsetExact;
 		this.#transcriptStartRequested = false;
 
 		const activeSpans: ViewportClickSpan[] = [];
@@ -1006,41 +1008,60 @@ export class Composer implements TerminalFrameProvider, NativeSurfaceProvider {
 	}
 
 	/** Scroll transcript rows; positive deltas move toward newer output. */
-	scrollTranscriptRows(delta: number): void {
-		if (this.#preferences.stickyPrompt !== "viewport" || !Number.isFinite(delta)) return;
+	scrollTranscriptRows(delta: number): boolean {
+		if (this.#preferences.stickyPrompt !== "viewport" || !Number.isFinite(delta)) return false;
 		const rows = Math.trunc(delta);
-		if (rows === 0) return;
-		this.#transcriptStartRequested = false;
-		const offsetFromTail = Math.max(
+		if (rows === 0) return false;
+		const requestedOffset = Math.max(
 			0,
 			Math.min(Number.MAX_SAFE_INTEGER, this.#transcriptCursor.offsetFromTail - rows),
 		);
-		if (offsetFromTail === this.#transcriptCursor.offsetFromTail) return;
-		this.#transcriptMaxOffset = Math.max(this.#transcriptMaxOffset, offsetFromTail);
+		const offsetFromTail = this.#transcriptMaxOffsetExact
+			? Math.min(this.#transcriptMaxOffset, requestedOffset)
+			: requestedOffset;
+		if (offsetFromTail === this.#transcriptCursor.offsetFromTail && !this.#transcriptStartRequested) return false;
+		this.#transcriptStartRequested = false;
+		if (offsetFromTail === this.#transcriptCursor.offsetFromTail) {
+			this.ui.requestRender();
+			return true;
+		}
 		this.#transcriptCursor = { ...this.#transcriptCursor, offsetFromTail };
 		this.ui.requestRender();
+		return true;
 	}
 
 	/** Move by one transcript viewport; -1 is older and 1 is newer. */
-	page(direction: -1 | 1): void {
-		this.scrollTranscriptRows(direction * Math.max(1, this.#transcriptViewportCapacity));
+	page(direction: -1 | 1): boolean {
+		return this.scrollTranscriptRows(direction * Math.max(1, this.#transcriptViewportCapacity));
 	}
 
 	/** Scroll to the oldest transcript rows, discovering the full prefix lazily. */
-	toStart(): void {
-		if (this.#preferences.stickyPrompt !== "viewport") return;
+	toStart(): boolean {
+		if (this.#preferences.stickyPrompt !== "viewport") return false;
+		if (this.#transcriptStartRequested) return true;
+		if (
+			this.#transcriptMaxOffsetExact &&
+			this.#transcriptCursor.offsetFromTail >= this.#transcriptMaxOffset
+		) {
+			return false;
+		}
 		this.#transcriptStartRequested = true;
 		this.ui.requestRender();
+		return true;
 	}
 
 	/** Resume following the newest transcript rows. */
-	toEnd(): void {
-		if (this.#preferences.stickyPrompt !== "viewport") return;
+	toEnd(): boolean {
+		if (this.#preferences.stickyPrompt !== "viewport") return false;
+		if (!this.#transcriptStartRequested && this.#transcriptCursor.offsetFromTail === 0) return false;
 		this.#transcriptStartRequested = false;
-		if (this.#transcriptCursor.offsetFromTail === 0) return;
-		this.#transcriptCursor = { ...this.#transcriptCursor, offsetFromTail: 0 };
+		if (this.#transcriptCursor.offsetFromTail !== 0) {
+			this.#transcriptCursor = { ...this.#transcriptCursor, offsetFromTail: 0 };
+		}
 		this.ui.requestRender();
+		return true;
 	}
+
 
 	/** Whether this composer already owns the terminal render/input loop. */
 	get started(): boolean {
@@ -1075,6 +1096,7 @@ export class Composer implements TerminalFrameProvider, NativeSurfaceProvider {
 			this.#transcriptCursor = { offsetFromTail: 0, measuredRows: 0, width: 0 };
 			this.#transcriptViewportCapacity = 0;
 			this.#transcriptMaxOffset = 0;
+			this.#transcriptMaxOffsetExact = false;
 			this.#transcriptStartRequested = false;
 			if (wasViewport) {
 				// Return archived rows to the native history path when leaving projection mode.

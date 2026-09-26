@@ -275,6 +275,7 @@ export class InputController {
 	#globalEditorActionsListenerInstalled = false;
 	#expandToolsListenerInstalled = false;
 	#inlineMouseListenerInstalled = false;
+	#viewportNavigationListenerInstalled = false;
 
 	/** Click-candidate id the hover band currently tracks; repaint only on change. */
 	#lastHoverClickId: string | undefined;
@@ -360,6 +361,27 @@ export class InputController {
 				if (!this.ctx.keybindings.matches(data, "app.clipboard.pasteImage")) return undefined;
 				void this.handleImagePaste();
 				return { consume: true };
+			});
+		}
+		if (!this.#viewportNavigationListenerInstalled) {
+			this.#viewportNavigationListenerInstalled = true;
+			this.ctx.ui.addInputListener(data => {
+				if (this.ctx.ui.hasOverlay()) return undefined;
+				if (this.ctx.ui.getFocused() !== this.ctx.editor) return undefined;
+				if (this.ctx.composer.stickyPrompt !== "viewport") return undefined;
+				if (matchesKey(data, "pageUp")) {
+					return this.ctx.composer.page(-1) ? { consume: true } : undefined;
+				}
+				if (matchesKey(data, "pageDown")) {
+					return this.ctx.composer.page(1) ? { consume: true } : undefined;
+				}
+				if (matchesKey(data, "home")) {
+					return this.ctx.composer.toStart() ? { consume: true } : undefined;
+				}
+				if (matchesKey(data, "end")) {
+					return this.ctx.composer.toEnd() ? { consume: true } : undefined;
+				}
+				return undefined;
 			});
 		}
 		if (!this.#globalEditorActionsListenerInstalled) {
@@ -756,10 +778,14 @@ export class InputController {
 	 */
 	#handleInlineMouse(data: string): { consume?: boolean; data?: string } | undefined {
 		if (!data.startsWith("\x1b[<")) return undefined;
-		if (!cfgTuiMouse.get(this.ctx.settings)) return undefined;
+
 		if (this.ctx.ui.hasOverlay()) return undefined;
 		const event = parseSgrMouse(data);
 		if (!event) return undefined;
+		if (event.wheel !== null && this.ctx.composer.stickyPrompt === "viewport") {
+			if (this.ctx.composer.scrollTranscriptRows(event.wheel * 3)) return { consume: true };
+		}
+		if (!cfgTuiMouse.get(this.ctx.settings)) return undefined;
 		if (event.motion) this.#updateHoverHighlight(event.row);
 		else if (event.leftClick) this.#focusClickedAgent(event.row);
 		return { consume: true };

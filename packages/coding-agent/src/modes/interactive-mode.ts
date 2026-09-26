@@ -1792,7 +1792,19 @@ export class InteractiveMode implements InteractiveModeContext {
 				this.ui.requestRender();
 			}),
 		);
-		this.ui.setInlineMouseTrackingProvider(() => this.#mouseCapture);
+		this.ui.setInlineMouseTrackingProvider(() => {
+			const clickCapture = this.#mouseCapture;
+			const viewportWheel = this.composer.stickyPrompt === "viewport";
+			// Hover bands belong only to clickable capture: viewport-only wheel
+			// reporting still requires clearing stale click highlighting.
+			if (!clickCapture) {
+				this.composer.setHoveredClickId(undefined);
+				// The provider can fire from a synchronous forced render before
+				// init reaches the controller block below.
+				this.#inputController?.clearHoverHighlight();
+			}
+			return clickCapture || viewportWheel;
+		});
 		this.chatContainer = new TranscriptContainer();
 		this.pendingMessagesContainer = new AnchoredLiveContainer();
 		this.progressHudContainer = new AnchoredLiveContainer();

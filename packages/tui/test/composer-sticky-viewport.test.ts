@@ -193,6 +193,10 @@ describe("composer sticky transcript viewport", () => {
 		const composer = new Composer({ terminal: new VirtualTerminal(80, 12) });
 		try {
 			expect(composer.stickyPrompt).toBe("off");
+			expect(composer.scrollTranscriptRows(-1)).toBe(false);
+			expect(composer.page(-1)).toBe(false);
+			expect(composer.toStart()).toBe(false);
+			expect(composer.toEnd()).toBe(false);
 			expect(composer.scrollTranscriptRows).toBeFunction();
 			expect(composer.page).toBeFunction();
 			expect(composer.toStart).toBeFunction();
@@ -377,6 +381,52 @@ describe("composer sticky transcript viewport", () => {
 		}
 	});
 
+	it("moves wheel navigation by the requested three transcript rows", () => {
+		const { composer } = createComposer("viewport", 6);
+		const transcript = new TranscriptContainer();
+		transcript.addChild(new Rows(Array.from({ length: 40 }, (_value, index) => `wheel row ${index}`)));
+		composer.setRuntimeChildren([transcript]);
+		try {
+			const before = composer.renderFrame({ columns: 80, rows: 6 });
+			const beforeLast = [...text(before.viewport).matchAll(/wheel row (\d+)/g)].map(match => Number(match[1])).at(-1);
+			expect(beforeLast).toBeDefined();
+			expect(composer.scrollTranscriptRows(-3)).toBe(true);
+			const after = composer.renderFrame({ columns: 80, rows: 6 });
+			const afterLast = [...text(after.viewport).matchAll(/wheel row (\d+)/g)].map(match => Number(match[1])).at(-1);
+			expect(afterLast).toBe(beforeLast! - 3);
+		} finally {
+			composer.stop();
+		}
+	});
+
+	it("accumulates older requests through cold history discovery to the exact start", () => {
+		const { composer } = createComposer("viewport", 8);
+		const transcript = new TranscriptContainer();
+		for (let index = 0; index < 512; index++) transcript.addChild(new Rows([`cold row ${index}`]));
+		composer.setRuntimeChildren([transcript]);
+		try {
+			let frame = composer.renderFrame({ columns: 80, rows: 8 });
+			const beforeRows = [...text(frame.viewport).matchAll(/cold row (\d+)/g)].map(match => Number(match[1]));
+			expect(beforeRows.at(-1)).toBe(511);
+			expect(composer.scrollTranscriptRows(-3)).toBe(true);
+			expect(composer.scrollTranscriptRows(-3)).toBe(true);
+			expect(composer.page(-1)).toBe(true);
+
+			frame = composer.renderFrame({ columns: 80, rows: 8 });
+			const afterRows = [...text(frame.viewport).matchAll(/cold row (\d+)/g)].map(match => Number(match[1]));
+			expect(afterRows.at(-1)).toBeLessThan(beforeRows.at(-1)! - 3);
+			expect(composer.toStart()).toBe(true);
+			expect(composer.toStart()).toBe(true);
+			frame = composer.renderFrame({ columns: 80, rows: 8 });
+			expect(text(frame.viewport)).toContain("cold row 0");
+			expect(composer.scrollTranscriptRows(-3)).toBe(false);
+			expect(composer.page(-1)).toBe(false);
+			expect(composer.toStart()).toBe(false);
+		} finally {
+			composer.stop();
+		}
+	});
+
 	it("pages, reaches both transcript ends, and resets its cursor across viewport mode changes", () => {
 		const { composer } = createComposer("off", 6);
 		const transcript = new TranscriptContainer();
@@ -387,31 +437,38 @@ describe("composer sticky transcript viewport", () => {
 			let frame = composer.renderFrame({ columns: 80, rows: 6 });
 			expect(frame.history).toBeUndefined();
 			expect(text(frame.viewport)).toContain("navigation row 19");
+			expect(composer.page(1)).toBe(false);
+			expect(composer.scrollTranscriptRows(1)).toBe(false);
+			expect(composer.toEnd()).toBe(false);
 
-			composer.page(-1);
+			expect(composer.page(-1)).toBe(true);
 			frame = composer.renderFrame({ columns: 80, rows: 6 });
 			expect(text(frame.viewport)).toContain("navigation row 8");
-			composer.page(1);
+			expect(composer.page(1)).toBe(true);
 			frame = composer.renderFrame({ columns: 80, rows: 6 });
 			expect(text(frame.viewport)).toContain("navigation row 19");
 
-			composer.toStart();
+			expect(composer.toStart()).toBe(true);
 			frame = composer.renderFrame({ columns: 80, rows: 6 });
 			expect(text(frame.viewport)).toContain("navigation row 0");
-			composer.scrollTranscriptRows(-1);
-			frame = composer.renderFrame({ columns: 80, rows: 6 });
-			expect(text(frame.viewport)).toContain("navigation row 0");
-			composer.toEnd();
+			expect(composer.toStart()).toBe(false);
+			expect(composer.scrollTranscriptRows(-1)).toBe(false);
+			expect(composer.toEnd()).toBe(true);
 			frame = composer.renderFrame({ columns: 80, rows: 6 });
 			expect(text(frame.viewport)).toContain("navigation row 19");
+			expect(composer.toEnd()).toBe(false);
 
-			composer.toStart();
+			expect(composer.toStart()).toBe(true);
 			frame = composer.renderFrame({ columns: 80, rows: 6 });
 			expect(text(frame.viewport)).toContain("navigation row 0");
 
 			composer.setPreferences({ stickyPrompt: "terminal" });
 			frame = composer.renderFrame({ columns: 80, rows: 6 });
 			if (frame.history !== undefined) composer.acknowledgeHistory(frame.history.id);
+			expect(composer.scrollTranscriptRows(-1)).toBe(false);
+			expect(composer.page(-1)).toBe(false);
+			expect(composer.toStart()).toBe(false);
+			expect(composer.toEnd()).toBe(false);
 			composer.setPreferences({ stickyPrompt: "viewport" });
 			frame = composer.renderFrame({ columns: 80, rows: 6 });
 			expect(frame.history).toBeUndefined();

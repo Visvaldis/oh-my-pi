@@ -413,7 +413,8 @@ export const cfgTuiStickyPrompt = register({
 			{
 				value: "viewport",
 				label: "Viewport",
-				description: "Keep prompt headers visible with OMP-owned scrolling; works in terminals such as Ghostty.",
+				description:
+					"Keep prompt headers visible with OMP-owned scrolling; works in terminals such as Ghostty. Captures the mouse wheel even when tui.mouse is false, so hold a modifier for native text selection. Archived viewport rows enter native scrollback only during normal shutdown; they are not retained after a crash.",
 			},
 		],
 	},

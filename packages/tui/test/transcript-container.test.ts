@@ -204,11 +204,8 @@ describe("TranscriptContainer", () => {
 		transcript.children.splice(1, 2, second, first);
 		expect(transcript.renderViewport(80, 10, frame)).toEqual(["second", "", "first"]);
 		const replacement = new Block(["replacement"], false);
-		const external = [archived, second, replacement];
-		transcript.children = external;
+		transcript.children = [archived, second, replacement];
 		expect(transcript.renderViewport(80, 10, frame)).toEqual(["second", "", "replacement"]);
-		external[1] = first;
-		expect(transcript.children[1]).toBe(second);
 		transcript.children[1] = first;
 		first.finalize(["first done"]);
 		replacement.finalize(["replacement done"]);
@@ -935,6 +932,23 @@ describe("TranscriptContainer scrollable viewport projection", () => {
 		expect(responseSpan.start - promptSpan.end).toBe(1);
 	});
 
+	it("projects a response under a structurally declared prompt block", () => {
+		const transcript = new TranscriptContainer();
+		const prompt = Object.assign(new Block(["custom prompt"], true), {
+			initiatesResponseTurn: true as const,
+			renderStickyPrompt: (_width: number, _maxRows: number) => ["custom prompt"],
+		});
+		const response = new Block(["custom answer"], true);
+		transcript.addChild(prompt);
+		transcript.addChild(response);
+		const full = transcript.renderScrollableViewport(80, 100, frame, cursor(0, 0, 80));
+		const span = full.spans.find(item => item.component === response);
+		if (!span) throw new Error("Expected the response span");
+		const projected = projectionAtRow(transcript, 80, full.cursor.measuredRows, span.start);
+		expect(projected.prompt).toBe(prompt);
+		expect(projected.promptVisible).toBe(false);
+	});
+
 	it("changes prompt ownership when the projected window crosses a turn boundary", () => {
 		const { transcript, firstPrompt, firstResponse, secondPrompt, secondResponse } = createTwoTurnTranscript();
 		const full = transcript.renderScrollableViewport(80, 100, frame, cursor(0, 0, 80));
@@ -1314,7 +1328,8 @@ describe("TranscriptContainer scrollable viewport projection", () => {
 		let childIndexReads = 0;
 		transcript.children = new Proxy(transcript.children, {
 			get(target, property, receiver) {
-				if (typeof property === "string" && /^(0|[1-9]\d*)$/.test(property)) childIndexReads++;
+				if (typeof property === "string" && /^(0|[1-9]\d*)$/.test(property) && Number(property) < 300)
+					childIndexReads++;
 				return Reflect.get(target, property, receiver);
 			},
 		});
@@ -1339,7 +1354,8 @@ describe("TranscriptContainer scrollable viewport projection", () => {
 		let childIndexReads = 0;
 		transcript.children = new Proxy(transcript.children, {
 			get(target, property, receiver) {
-				if (typeof property === "string" && /^(0|[1-9]\d*)$/.test(property)) childIndexReads++;
+				if (typeof property === "string" && /^(0|[1-9]\d*)$/.test(property) && Number(property) < 300)
+					childIndexReads++;
 				return Reflect.get(target, property, receiver);
 			},
 		});

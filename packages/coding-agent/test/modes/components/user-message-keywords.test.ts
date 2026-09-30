@@ -38,7 +38,7 @@ function render(text: string): string {
 	return new UserMessageComponent(text).render(80).join("\n");
 }
 
-function renderThroughUiHelpers(text: string): string {
+function renderThroughUiHelpers(text: string, synthetic = false): string {
 	const chatContainer = new Container();
 	const sessionManagerMock = { putBlobSync: () => undefined };
 	const helpers = new UiHelpers({
@@ -52,6 +52,7 @@ function renderThroughUiHelpers(text: string): string {
 		role: "user",
 		content: [{ type: "text", text }],
 		attribution: "user",
+		synthetic,
 		timestamp: Date.now(),
 	});
 	const component = chatContainer.children.at(-1);
@@ -197,6 +198,30 @@ describe("UserMessageComponent magic-keyword highlighting", () => {
 		expect(raw.startsWith(prompt)).toBe(true);
 		expect(raw.indexOf("viewport prompt")).toBeLessThan(raw.indexOf(command));
 		expect(raw.endsWith(command + output + done)).toBe(true);
+	});
+
+	it("keeps synthetic prompts out of terminal response grouping", () => {
+		cfgTuiStickyPrompt.set(Settings.instance, "terminal");
+		const synthetic = renderThroughUiHelpers("agent instruction", true);
+		const user = renderThroughUiHelpers("real user prompt");
+		const response = "real assistant response";
+		const done = "\x1b]133;D;0\x07";
+		const prompt = "\x1b]133;A\x07";
+		const command = "\x1b]133;B\x07";
+		const output = "\x1b]133;C\x07";
+
+		// Synthetic/developer bubbles retain their self-contained legacy envelope;
+		// only the actual user prompt opens the semantic zone containing the answer.
+		expect(synthetic.startsWith(prompt)).toBe(true);
+		expect(synthetic.startsWith(done + prompt)).toBe(false);
+		expect(synthetic.endsWith(command + output + done)).toBe(true);
+		expect(user.startsWith(done + prompt + command)).toBe(true);
+		expect(user.endsWith(output)).toBe(true);
+
+		const stream = synthetic + user + response;
+		const userOutput = stream.indexOf(output, synthetic.length);
+		expect(userOutput).toBeLessThan(stream.indexOf(response));
+		expect(stream.indexOf(done, userOutput + output.length)).toBe(-1);
 	});
 
 	it("collapses image markers to identity-colored chip tokens in the rendered bubble", () => {

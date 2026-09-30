@@ -1016,49 +1016,17 @@ describe("InputController sticky viewport navigation", () => {
 		return { ...context, listeners: registeredInputListeners(context.spies.addInputListener) };
 	}
 
-	it("routes viewport navigation keys to their exact composer actions", async () => {
-		const { composer, listeners } = await setup();
-		composer.stickyPrompt = "viewport";
-		composer.page.mockReturnValue(true);
-		composer.toStart.mockReturnValue(true);
-		composer.toEnd.mockReturnValue(true);
+	function rebindTranscriptNavigation(setKeybinding: (action: string, keys: KeyId[]) => void): void {
+		setKeybinding("app.transcript.pageUp", ["alt+p"]);
+		setKeybinding("app.transcript.pageDown", ["alt+n"]);
+		setKeybinding("app.transcript.start", ["alt+g"]);
+		setKeybinding("app.transcript.end", ["alt+shift+g"]);
+	}
 
-		expect(dispatchInput(listeners, PAGE_UP)).toEqual({ consume: true });
-		expect(dispatchInput(listeners, PAGE_DOWN)).toEqual({ consume: true });
-		expect(dispatchInput(listeners, HOME)).toEqual({ consume: true });
-		expect(dispatchInput(listeners, END)).toEqual({ consume: true });
-		expect(composer.page.mock.calls).toEqual([[-1], [1]]);
-		expect(composer.toStart).toHaveBeenCalledTimes(1);
-		expect(composer.toEnd).toHaveBeenCalledTimes(1);
-		expect(composer.scrollTranscriptRows).not.toHaveBeenCalled();
-	});
-
-	it("consumes repeated Home requests while lazy start is pending without editing the draft", async () => {
+	it("leaves native editor navigation keys untouched while editing a draft", async () => {
 		const { composer, listeners, editor } = await setup();
 		composer.stickyPrompt = "viewport";
-		composer.toStart.mockReturnValue(true);
-		editor.setText("draft stays intact");
-
-		expect(dispatchInput(listeners, HOME)).toEqual({ consume: true });
-		expect(dispatchInput(listeners, HOME)).toEqual({ consume: true });
-		expect(composer.toStart).toHaveBeenCalledTimes(2);
-		expect(editor.getText()).toBe("draft stays intact");
-	});
-
-	it("leaves viewport keys unconsumed when navigation does not move", async () => {
-		const { composer, listeners } = await setup();
-		composer.stickyPrompt = "viewport";
-
-		expect(dispatchInput(listeners, PAGE_UP)).toBeUndefined();
-		expect(composer.page.mock.calls).toEqual([[-1]]);
-		expect(composer.toStart).not.toHaveBeenCalled();
-		expect(composer.toEnd).not.toHaveBeenCalled();
-		expect(composer.scrollTranscriptRows).not.toHaveBeenCalled();
-	});
-
-	it("does not route navigation keys outside viewport presentation", async () => {
-		const { composer, listeners } = await setup();
-		composer.stickyPrompt = "terminal";
+		editor.setText("draft with a preserved caret");
 
 		for (const key of [PAGE_UP, PAGE_DOWN, HOME, END]) {
 			expect(dispatchInput(listeners, key)).toBeUndefined();
@@ -1066,19 +1034,68 @@ describe("InputController sticky viewport navigation", () => {
 		expect(composer.page).not.toHaveBeenCalled();
 		expect(composer.toStart).not.toHaveBeenCalled();
 		expect(composer.toEnd).not.toHaveBeenCalled();
+		expect(editor.getText()).toBe("draft with a preserved caret");
 	});
 
-	it("defers viewport navigation to overlays and non-editor focus", async () => {
+	it("routes rebindable transcript shortcuts without changing a nonempty draft", async () => {
+		const context = await setup();
+		const { composer, listeners, editor } = context;
+		composer.stickyPrompt = "viewport";
+		composer.page.mockReturnValue(true);
+		composer.toStart.mockReturnValue(true);
+		composer.toEnd.mockReturnValue(true);
+		rebindTranscriptNavigation(context.setKeybinding);
+		editor.setText("draft remains editable");
+
+		expect(dispatchInput(listeners, "\x1bp")).toEqual({ consume: true });
+		expect(dispatchInput(listeners, "\x1bn")).toEqual({ consume: true });
+		expect(dispatchInput(listeners, "\x1bg")).toEqual({ consume: true });
+		expect(dispatchInput(listeners, "\x1bG")).toEqual({ consume: true });
+		expect(composer.page.mock.calls).toEqual([[-1], [1]]);
+		expect(composer.toStart).toHaveBeenCalledTimes(1);
+		expect(composer.toEnd).toHaveBeenCalledTimes(1);
+		expect(editor.getText()).toBe("draft remains editable");
+	});
+
+	it("leaves rebound transcript shortcuts unconsumed when the viewport does not move", async () => {
+		const context = await setup();
+		const { composer, listeners } = context;
+		composer.stickyPrompt = "viewport";
+		rebindTranscriptNavigation(context.setKeybinding);
+
+		expect(dispatchInput(listeners, "\x1bp")).toBeUndefined();
+		expect(composer.page.mock.calls).toEqual([[-1]]);
+		expect(composer.toStart).not.toHaveBeenCalled();
+		expect(composer.toEnd).not.toHaveBeenCalled();
+	});
+
+	it("does not route transcript shortcuts outside viewport presentation", async () => {
+		const context = await setup();
+		const { composer, listeners } = context;
+		composer.stickyPrompt = "terminal";
+		rebindTranscriptNavigation(context.setKeybinding);
+
+		for (const key of ["\x1bp", "\x1bn", "\x1bg", "\x1bG"]) {
+			expect(dispatchInput(listeners, key)).toBeUndefined();
+		}
+		expect(composer.page).not.toHaveBeenCalled();
+		expect(composer.toStart).not.toHaveBeenCalled();
+		expect(composer.toEnd).not.toHaveBeenCalled();
+	});
+
+	it("defers transcript shortcuts to overlays and non-editor focus", async () => {
 		const overlay = await setup();
 		overlay.composer.stickyPrompt = "viewport";
+		rebindTranscriptNavigation(overlay.setKeybinding);
 		overlay.setOverlayVisible(true);
-		expect(dispatchInput(overlay.listeners, PAGE_UP)).toBeUndefined();
+		expect(dispatchInput(overlay.listeners, "\x1bp")).toBeUndefined();
 		expect(overlay.composer.page).not.toHaveBeenCalled();
 
 		const focused = await setup();
 		focused.composer.stickyPrompt = "viewport";
+		rebindTranscriptNavigation(focused.setKeybinding);
 		focused.setFocused({ handleInput() {} });
-		expect(dispatchInput(focused.listeners, PAGE_DOWN)).toBeUndefined();
+		expect(dispatchInput(focused.listeners, "\x1bn")).toBeUndefined();
 		expect(focused.composer.page).not.toHaveBeenCalled();
 	});
 

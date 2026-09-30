@@ -1,6 +1,5 @@
 import { getComposerStyle } from "../components/composer/registry";
 import { Spacer } from "../components/spacer";
-import { UserMessageComponent } from "../chat/user-message";
 import type { StatusLineComponent } from "../status-line/component";
 import type { StatusLineSession } from "../status-line/host";
 import { createStartupStatusLine, type StatusLineStartupData } from "../status-line/startup";
@@ -27,6 +26,7 @@ import {
 	TranscriptProjectionRenderContext,
 	type ScrollableTranscriptProjection,
 	type TranscriptViewportCursor,
+	type TurnPromptBlock,
 } from "../chrome/transcript-container";
 import { type LspServerInfo, type RecentSession, WelcomeComponent } from "./welcome";
 import type { WordCompletionMethod } from "./word-completion";
@@ -236,7 +236,6 @@ export class Composer implements TerminalFrameProvider, NativeSurfaceProvider {
 	#nativeDock: readonly Component[] | undefined;
 	/** Cache-driven status line shown until {@link setStatusComponent} mounts the session's. */
 	#startupStatus: StatusLineComponent | undefined;
-	#statusSnapshot: ComposerStatusCache | undefined;
 	#transcriptCursor: TranscriptViewportCursor = { offsetFromTail: 0, measuredRows: 0, width: 0 };
 	#transcriptViewportCapacity = 0;
 	#transcriptMaxOffset = 0;
@@ -473,6 +472,12 @@ export class Composer implements TerminalFrameProvider, NativeSurfaceProvider {
 		return { history, viewport: this.#paintHoverBand(mutable, spans) };
 	}
 
+	/**
+	 * Reserve a header only for a prompt scrolled out of the selected window.
+	 * Project again with the reduced capacity so the sticky row never hides
+	 * transcript content; a bounded convergence loop handles turn boundaries.
+	 * Native scrollback is restored by the explicit shutdown flush.
+	 */
 	#renderScrollableViewportRows(
 		transcript: TranscriptContainer,
 		width: number,
@@ -490,7 +495,7 @@ export class Composer implements TerminalFrameProvider, NativeSurfaceProvider {
 			cursor = { ...cursor, offsetFromTail: Number.MAX_SAFE_INTEGER };
 		}
 		const stickyRowLimit = Math.min(4, Math.max(1, Math.floor(availableRows / 3)));
-		const renderPromptRows = (prompt: UserMessageComponent, maxRows: number): readonly string[] => {
+		const renderPromptRows = (prompt: TurnPromptBlock, maxRows: number): readonly string[] => {
 			if (maxRows !== 1) return prompt.renderStickyPrompt(width, maxRows);
 			const contentRow = prompt.renderStickyPrompt(width, 2).find(row => Bun.stripANSI(row).trim().length > 0);
 			return contentRow === undefined ? [] : [contentRow];
@@ -513,12 +518,12 @@ export class Composer implements TerminalFrameProvider, NativeSurfaceProvider {
 					projection: ScrollableTranscriptProjection;
 					capacity: number;
 					reservedRows: number;
-					prompt: UserMessageComponent;
+					prompt: TurnPromptBlock;
 					rows: readonly string[];
 			  }
 			| undefined;
 		const seenSelections: Array<{
-			prompt: UserMessageComponent | undefined;
+			prompt: TurnPromptBlock | undefined;
 			promptVisible: boolean;
 			reservedRows: number;
 			desiredRows: number;

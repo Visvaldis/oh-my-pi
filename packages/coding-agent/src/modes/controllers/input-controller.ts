@@ -363,22 +363,24 @@ export class InputController {
 				return { consume: true };
 			});
 		}
+		// Keep plain Home/End/PageUp/PageDown with the editor; transcript navigation
+		// uses separate app bindings so active draft caret and paging stay native.
 		if (!this.#viewportNavigationListenerInstalled) {
 			this.#viewportNavigationListenerInstalled = true;
 			this.ctx.ui.addInputListener(data => {
 				if (this.ctx.ui.hasOverlay()) return undefined;
 				if (this.ctx.ui.getFocused() !== this.ctx.editor) return undefined;
 				if (this.ctx.composer.stickyPrompt !== "viewport") return undefined;
-				if (matchesKey(data, "pageUp")) {
+				if (this.ctx.keybindings.matches(data, "app.transcript.pageUp")) {
 					return this.ctx.composer.page(-1) ? { consume: true } : undefined;
 				}
-				if (matchesKey(data, "pageDown")) {
+				if (this.ctx.keybindings.matches(data, "app.transcript.pageDown")) {
 					return this.ctx.composer.page(1) ? { consume: true } : undefined;
 				}
-				if (matchesKey(data, "home")) {
+				if (this.ctx.keybindings.matches(data, "app.transcript.start")) {
 					return this.ctx.composer.toStart() ? { consume: true } : undefined;
 				}
-				if (matchesKey(data, "end")) {
+				if (this.ctx.keybindings.matches(data, "app.transcript.end")) {
 					return this.ctx.composer.toEnd() ? { consume: true } : undefined;
 				}
 				return undefined;

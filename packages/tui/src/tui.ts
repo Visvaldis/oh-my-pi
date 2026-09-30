@@ -477,47 +477,7 @@ export interface OverlayHandle {
  * Container - a component that contains other components
  */
 export class Container implements Component {
-	#childrenRevision = 0;
-	#children: Component[] = this.#trackChildren([]);
-
-	get children(): Component[] {
-		return this.#children;
-	}
-
-	set children(children: Component[]) {
-		if (children === this.#children) return;
-		this.#children = this.#trackChildren(children.slice());
-		this.#recordChildrenMutation();
-	}
-
-	// Replacements are copied; mutations through the exposed array proxy bump this revision.
-	protected get childrenRevision(): number {
-		return this.#childrenRevision;
-	}
-
-	#trackChildren(children: Component[]): Component[] {
-		return new Proxy(children, {
-			set: (target, property, value) => {
-				const changed =
-					!Object.prototype.hasOwnProperty.call(target, property) ||
-					!Object.is(Reflect.get(target, property), value);
-				const success = Reflect.set(target, property, value);
-				if (success && changed) this.#recordChildrenMutation();
-				return success;
-			},
-			deleteProperty: (target, property) => {
-				const changed = Object.prototype.hasOwnProperty.call(target, property);
-				const success = Reflect.deleteProperty(target, property);
-				if (success && changed) this.#recordChildrenMutation();
-				return success;
-			},
-		});
-	}
-
-	#recordChildrenMutation(): void {
-		this.#childrenRevision++;
-		this.#memoLines = undefined;
-	}
+	children: Component[] = [];
 
 	// Memoized concatenation of the children's latest renders. Children are
 	// still rendered every frame (renders carry side effects: image placement
@@ -545,21 +505,22 @@ export class Container implements Component {
 	}
 
 	addChild(component: Component): void {
-		if (this.#ignoreTight) {
-			component.setIgnoreTight?.(true);
-		}
 		this.children.push(component);
+		if (this.#ignoreTight) component.setIgnoreTight?.(true);
+		this.#memoLines = undefined;
 	}
 
 	removeChild(component: Component): void {
 		const index = this.children.indexOf(component);
 		if (index !== -1) {
 			this.children.splice(index, 1);
+			this.#memoLines = undefined;
 		}
 	}
 
 	clear(): void {
 		this.children = [];
+		this.#memoLines = undefined;
 	}
 
 	/** Dispose every child, then detach it from this container. */

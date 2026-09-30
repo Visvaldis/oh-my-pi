@@ -5,7 +5,6 @@ import { col } from "../native/describe";
 import type { NativeNode } from "../native/node";
 import { isNativeSettled, settleNative } from "../native/settle";
 import { isToolActivityComponent } from "./tool-activity";
-import { UserMessageComponent } from "../chat/user-message";
 
 /** Shared animation time supplied by the constrained transcript root. */
 export interface AnimationFrame {
@@ -81,6 +80,17 @@ interface FinalizableBlock {
 	renderTranscriptBlockEmergencyRow?(width: number): string | undefined;
 }
 
+/** Response-initiating prompt capability, independent of its chat renderer. */
+export interface TurnPromptBlock extends Component {
+	readonly initiatesResponseTurn: boolean;
+	renderStickyPrompt(width: number, maxRows: number): readonly string[];
+}
+
+function isTurnPromptBlock(component: Component): component is TurnPromptBlock {
+	const candidate = component as Component & Partial<TurnPromptBlock>;
+	return candidate.initiatesResponseTurn === true && typeof candidate.renderStickyPrompt === "function";
+}
+
 /**
  * Block lifecycle:
  * - `active`: still mutating; renders live and counts against tool admission.
@@ -113,7 +123,7 @@ interface TranscriptEntry {
 	 */
 	stableFrozen: boolean;
 	/** Initiating user prompt inherited by this entry, including its own prompt bubble. */
-	turnPrompt?: UserMessageComponent;
+	turnPrompt?: TurnPromptBlock;
 	/** Stable historical rows, memoized for a small number of width epochs. */
 	viewportRowsByWidth: Map<number, readonly string[]>;
 }
@@ -137,6 +147,14 @@ interface ViewportWidthGeometry {
 	/** Compact counts only for entries whose geometry has been discovered. */
 	rowCounts: Map<number, number>;
 	root?: ViewportGeometryNode;
+}
+
+interface TranscriptWindowLayout {
+	readonly offsetFromTail: number;
+	readonly maxOffset: number;
+	readonly maxOffsetExact: boolean;
+	readonly windowStart: number;
+	readonly windowEnd: number;
 }
 
 type RetirementPolicy = "pressure" | "flush";
@@ -312,7 +330,7 @@ export interface ScrollableTranscriptProjection {
 	readonly maxOffset: number;
 	/** True when maxOffset is exact because the complete prefix is measured. */
 	readonly maxOffsetExact: boolean;
-	readonly prompt?: UserMessageComponent;
+	readonly prompt?: TurnPromptBlock;
 	/** True when non-whitespace text from the initiating prompt is in `rows`. */
 	readonly promptVisible: boolean;
 }
@@ -320,7 +338,6 @@ export interface ScrollableTranscriptProjection {
 /** Owns transcript order, live capacity, and ordered immutable retirement. */
 export class TranscriptContainer extends Container {
 	#entries: TranscriptEntry[] = [];
-	#syncedChildrenRevision = this.childrenRevision;
 	#frontier = 0;
 	#archiveFrontier = 0;
 	#activeEntries = new Set<TranscriptEntry>();
@@ -359,23 +376,17 @@ export class TranscriptContainer extends Container {
 	#frameRowsWidth = 0;
 	/** The `children` array `#entries` last mirrored; see {@link #syncEntries}. */
 	#syncedChildren: Component[] | undefined;
-	/** Forces the next {@link #syncEntries} to compare every entry, not just the live tail. */
-	#entriesUnverified = false;
 	/** Block list handed to the native frame provider, reused while the children are unchanged. */
 	#nativeBlocks: readonly Component[] = [];
 	#nativeNode: NativeNode | undefined;
 	override addChild(component: Component): void {
 		const lastEntry = this.#entries.at(-1);
-		if (this.childrenRevision !== this.#syncedChildrenRevision) this.#syncEntries();
-		else if (this.children.length !== this.#entries.length || this.children.at(-1) !== lastEntry?.component)
+		if (this.children.length !== this.#entries.length || this.children.at(-1) !== lastEntry?.component)
 			this.#syncEntries();
 		if (isToolActivityComponent(component)) component.setToolActivityVisible(this.#toolActivityVisible);
 		super.addChild(component);
 		const previousPrompt = this.#entries.at(-1)?.turnPrompt;
-		const turnPrompt =
-			component instanceof UserMessageComponent && component.initiatesResponseTurn === true
-				? component
-				: previousPrompt;
+		const turnPrompt = isTurnPromptBlock(component) ? component : previousPrompt;
 		const entry: TranscriptEntry = {
 			index: this.#entries.length,
 			component,
@@ -390,11 +401,7 @@ export class TranscriptContainer extends Container {
 		};
 		if (turnPrompt !== undefined) entry.turnPrompt = turnPrompt;
 		this.#entries.push(entry);
-		this.#syncedChildrenRevision = this.childrenRevision;
 		if (!this.#settleViewportEntry(entry)) this.#activeEntries.add(entry);
-		// Callers may splice a just-added block into place (insert after an
-		// anchor); re-check the whole list once instead of trusting positions.
-		this.#entriesUnverified = true;
 	}
 
 	override removeChild(component: Component): void {
@@ -407,11 +414,10 @@ export class TranscriptContainer extends Container {
 			this.#entries.splice(removedIndex, 1);
 			if (removedIndex < this.#archiveFrontier) this.#archiveFrontier--;
 			for (let index = removedIndex; index < this.#entries.length; index++) this.#entries[index]!.index = index;
-			if (removed.component instanceof UserMessageComponent && removed.component.initiatesResponseTurn === true) {
+			if (isTurnPromptBlock(removed.component)) {
 				this.#recomputeTurnOwnership(removedIndex);
 			}
 		}
-		this.#syncedChildrenRevision = this.childrenRevision;
 		this.#clearViewportGeometry();
 		this.#frontier = Math.min(this.#frontier, this.#entries.length);
 		this.#childStartRows.delete(component);
@@ -423,7 +429,6 @@ export class TranscriptContainer extends Container {
 		this.#activeEntries.clear();
 		this.#frontier = 0;
 		this.#archiveFrontier = 0;
-		this.#syncedChildrenRevision = this.childrenRevision;
 		this.#clearViewportGeometry();
 		this.#offered = undefined;
 		this.#childStartRows.clear();
@@ -640,7 +645,12 @@ export class TranscriptContainer extends Container {
 		return this.#lastViewportSpans;
 	}
 
-	/** Project a selected window, discovering historical geometry backward from the tail. */
+	/**
+	 * Project a selected window, discovering historical geometry backward from
+	 * the tail. Settled rows remain in the ledger (not native scrollback) while
+	 * viewport mode is active; the cursor's measured suffix preserves an older
+	 * window as new output arrives without rendering the full session each frame.
+	 */
 	renderScrollableViewport(
 		width: number,
 		rows: number,
@@ -765,7 +775,7 @@ export class TranscriptContainer extends Container {
 			}
 		}
 
-		const layoutWindow = () => {
+		const layoutWindow = (): TranscriptWindowLayout => {
 			const complete = geometry.startIndex === 0;
 			const maxKnownOffset = Math.max(0, geometry.rowCount - height);
 			const offsetFromTail = complete ? Math.min(requestedOffset, maxKnownOffset) : requestedOffset;
@@ -787,7 +797,7 @@ export class TranscriptContainer extends Container {
 			}
 			return low;
 		};
-		const selectedEntries = (window: ReturnType<typeof layoutWindow>) => {
+		const selectedEntries = (window: TranscriptWindowLayout) => {
 			if (height === 0 || window.windowStart >= window.windowEnd || geometry.startIndex >= geometry.entryCount) {
 				return { start: geometry.entryCount, end: geometry.entryCount };
 			}
@@ -905,7 +915,7 @@ export class TranscriptContainer extends Container {
 		const selected = selectedEntries(window);
 		const projectedRows: string[] = [];
 		const spans: TranscriptViewportSpan[] = [];
-		let prompt: UserMessageComponent | undefined;
+		let prompt: TurnPromptBlock | undefined;
 		let promptVisible = false;
 		let index = this.#nextViewportNonEmptyIndex(geometry, selected.start, selected.end);
 		while (index < selected.end) {
@@ -1866,30 +1876,21 @@ export class TranscriptContainer extends Container {
 
 	/**
 	 * Mirror `children` into `#entries`. The container's own add/remove/clear
-	 * keep the two aligned, so the per-frame check stays off the committed
-	 * ledger: external edits to the public `children` array are caught by array
-	 * identity (replacement), length (push, removing splices), and an identity
-	 * scan of the live tail (in-place reorders and index writes). Committed
-	 * blocks are immutable history nothing reorders, and the scan skipping
-	 * them keeps this proportional to the live tail rather than the session.
+	 * keep the two aligned, so the per-frame check stays off committed and
+	 * viewport-archived history. External edits to the public `children` array
+	 * are caught by array identity (replacement), length, and a scan of the
+	 * mutable tail (in-place reorders and index writes). Historical blocks
+	 * are immutable; the hot scan stays proportional to the live tail.
 	 */
 	#syncEntries(): void {
 		const children = this.children;
-		const revision = this.childrenRevision;
 		if (
-			!this.#entriesUnverified &&
 			children === this.#syncedChildren &&
-			this.#entriesMatch(children, this.#frontier)
-		) {
-			this.#syncedChildrenRevision = revision;
+			this.#entriesMatch(children, Math.max(this.#frontier, this.#archiveFrontier))
+		)
 			return;
-		}
-		this.#entriesUnverified = false;
 		this.#syncedChildren = children;
-		if (this.#entriesMatch(children, 0)) {
-			this.#syncedChildrenRevision = revision;
-			return;
-		}
+		if (this.#entriesMatch(children, 0)) return;
 		this.#clearViewportGeometry();
 		const existing = new Map(this.#entries.map(entry => [entry.component, entry]));
 		this.#entries = this.children.map((component, index) => {
@@ -1917,7 +1918,6 @@ export class TranscriptContainer extends Container {
 			if (state !== "committed" && state !== "archived") break;
 			this.#archiveFrontier++;
 		}
-		this.#syncedChildrenRevision = revision;
 		this.#recomputeTurnOwnership();
 	}
 
@@ -1935,9 +1935,7 @@ export class TranscriptContainer extends Container {
 		let turnPrompt = startIndex === 0 ? undefined : this.#entries[startIndex - 1]?.turnPrompt;
 		for (let index = startIndex; index < this.#entries.length; index++) {
 			const entry = this.#entries[index]!;
-			if (entry.component instanceof UserMessageComponent && entry.component.initiatesResponseTurn === true) {
-				turnPrompt = entry.component;
-			}
+			if (isTurnPromptBlock(entry.component)) turnPrompt = entry.component;
 			if (turnPrompt === undefined) delete entry.turnPrompt;
 			else entry.turnPrompt = turnPrompt;
 		}

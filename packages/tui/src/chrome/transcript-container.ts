@@ -367,10 +367,7 @@ export class TranscriptContainer extends Container {
 	override addChild(component: Component): void {
 		const lastEntry = this.#entries.at(-1);
 		if (this.childrenRevision !== this.#syncedChildrenRevision) this.#syncEntries();
-		else if (
-			this.children.length !== this.#entries.length ||
-			this.children.at(-1) !== lastEntry?.component
-		)
+		else if (this.children.length !== this.#entries.length || this.children.at(-1) !== lastEntry?.component)
 			this.#syncEntries();
 		if (isToolActivityComponent(component)) component.setToolActivityVisible(this.#toolActivityVisible);
 		super.addChild(component);
@@ -1167,12 +1164,13 @@ export class TranscriptContainer extends Container {
 		// Only a render publishes a block's stable rows, so the head renders
 		// before its progressive-append eligibility is read.
 		const head = this.#entries[this.#frontier];
-		if (head !== undefined) this.#measuredRows(head, width);
+		if (head !== undefined && head.state !== "archived") this.#measuredRows(head, width);
 		const appendHead =
 			policy === "pressure" &&
 			head?.mode === "appendOnly" &&
 			!head.stableFrozen &&
 			head.state !== "committed" &&
+			head.state !== "archived" &&
 			head.emitted < head.stableRows.length
 				? head
 				: undefined;

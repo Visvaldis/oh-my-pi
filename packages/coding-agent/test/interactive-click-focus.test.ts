@@ -117,7 +117,7 @@ describe("inline click-to-focus geometry", () => {
 	});
 
 	it("enables wheel reporting in viewport mode when clickable mouse capture is off", async () => {
-		cfgTuiMouse.set(settings, false);
+		cfgTuiMouse.set(mode.settings, false);
 		cfgTuiStickyPrompt.set(session.settings, "viewport");
 		mode.composer.setPreferences({ stickyPrompt: "viewport" });
 		const write = vi.spyOn(term, "write");

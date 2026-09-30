@@ -29,6 +29,7 @@ import {
 	type TranscriptViewportCursor,
 } from "../chrome/transcript-container";
 import { type LspServerInfo, type RecentSession, WelcomeComponent } from "./welcome";
+import type { WordCompletionMethod } from "./word-completion";
 import { ensureThemeSync, getEditorTheme, theme } from "../theme/theme";
 
 const DOUBLE_INTERRUPT_MS = 500;
@@ -235,7 +236,7 @@ export class Composer implements TerminalFrameProvider, NativeSurfaceProvider {
 	#nativeDock: readonly Component[] | undefined;
 	/** Cache-driven status line shown until {@link setStatusComponent} mounts the session's. */
 	#startupStatus: StatusLineComponent | undefined;
-	#statusSnapshot: ComposerStatusSnapshot | undefined;
+	#statusSnapshot: ComposerStatusCache | undefined;
 	#transcriptCursor: TranscriptViewportCursor = { offsetFromTail: 0, measuredRows: 0, width: 0 };
 	#transcriptViewportCapacity = 0;
 	#transcriptMaxOffset = 0;
@@ -404,7 +405,6 @@ export class Composer implements TerminalFrameProvider, NativeSurfaceProvider {
 		this.#transientChromeFloor = Math.min(this.#transientChromeFloor ?? transientRows, transientRows);
 		const belowFloor = after.length - transientRows + this.#transientChromeFloor;
 		const viewportMode = this.#preferences.stickyPrompt === "viewport" && !this.#historyFlush;
-		if (viewportMode) transcript.archiveFinalizedForViewport();
 		const now = performance.now();
 		const frame: AnimationFrame = { now, tick: Math.floor(now / 80) };
 		if (!viewportMode) {

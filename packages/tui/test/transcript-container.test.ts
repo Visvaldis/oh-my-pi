@@ -865,7 +865,7 @@ describe("TranscriptContainer viewport click spans", () => {
 	});
 });
 
-class CountingBlock extends Block {
+class ProjectionCountingBlock extends Block {
 	renderCalls = 0;
 
 	override render(width?: number): readonly string[] {
@@ -1031,7 +1031,7 @@ describe("TranscriptContainer scrollable viewport projection", () => {
 
 	it("recomputes a projected range when a refreshed historical entry changes row count", () => {
 		const transcript = new TranscriptContainer();
-		const changing = new CountingBlock(["row 1", "row 2", "row 3", "row 4"], true);
+		const changing = new ProjectionCountingBlock(["row 1", "row 2", "row 3", "row 4"], true);
 		transcript.addChild(changing);
 		transcript.addChild(new Block(["tail"], true));
 		const measured = transcript.renderScrollableViewport(80, 100, frame, cursor(0, 0, 80));
@@ -1159,9 +1159,9 @@ describe("TranscriptContainer scrollable viewport projection", () => {
 
 	it("leaves unrelated old entries unrendered until incremental scrolling reaches them", () => {
 		const transcript = new TranscriptContainer();
-		const entries: CountingBlock[] = [];
+		const entries: ProjectionCountingBlock[] = [];
 		for (let index = 0; index < 20; index++) {
-			const entry = new CountingBlock([`historical row ${index}`], true);
+			const entry = new ProjectionCountingBlock([`historical row ${index}`], true);
 			entries.push(entry);
 			transcript.addChild(entry);
 		}
@@ -1182,11 +1182,11 @@ describe("TranscriptContainer scrollable viewport projection", () => {
 
 	it("reuses cached historical rows outside nearby projected windows", () => {
 		const transcript = new TranscriptContainer();
-		const entries: CountingBlock[] = [];
+		const entries: ProjectionCountingBlock[] = [];
 		const prompts: CountingUserMessageComponent[] = [];
 		for (let index = 0; index < 12; index++) {
 			const prompt = new CountingUserMessageComponent(`prompt ${index}`);
-			const response = new CountingBlock([`response ${index} row 1`, `response ${index} row 2`], true);
+			const response = new ProjectionCountingBlock([`response ${index} row 1`, `response ${index} row 2`], true);
 			prompts.push(prompt);
 			entries.push(response);
 			transcript.addChild(prompt);
@@ -1209,9 +1209,9 @@ describe("TranscriptContainer scrollable viewport projection", () => {
 	});
 	it("seeks warm deep windows without inspecting the history between the tail and selection", () => {
 		const transcript = new TranscriptContainer();
-		const entries: CountingBlock[] = [];
+		const entries: ProjectionCountingBlock[] = [];
 		for (let index = 0; index < 128; index++) {
-			const entry = new CountingBlock([`history ${index}`], true);
+			const entry = new ProjectionCountingBlock([`history ${index}`], true);
 			entries.push(entry);
 			transcript.addChild(entry);
 		}
@@ -1222,7 +1222,7 @@ describe("TranscriptContainer scrollable viewport projection", () => {
 		const selected = projectionAtRow(transcript, 80, full.cursor.measuredRows, targetSpan.start);
 		expect(selected.spans).toEqual([{ component: target, start: 0, end: 1 }]);
 
-		const appended = new CountingBlock(["new tail"], true);
+		const appended = new ProjectionCountingBlock(["new tail"], true);
 		transcript.addChild(appended);
 		const tail = transcript.renderScrollableViewport(80, 1, frame, cursor(0, full.cursor.measuredRows, 80));
 		const targetOffset = full.cursor.measuredRows + 2 - targetSpan.start - 1;
@@ -1249,7 +1249,7 @@ describe("TranscriptContainer scrollable viewport projection", () => {
 
 	it("clears cached historical rows on a presentation reset", () => {
 		const transcript = new TranscriptContainer();
-		const block = new CountingBlock(["before reset"], true);
+		const block = new ProjectionCountingBlock(["before reset"], true);
 		transcript.addChild(block);
 		const first = transcript.renderScrollableViewport(80, 1, frame, cursor(0, 0, 80));
 		expect(first.cursor.measuredRows).toBe(1);
@@ -1263,7 +1263,7 @@ describe("TranscriptContainer scrollable viewport projection", () => {
 
 	it("bounds cached historical rows to recent width epochs", () => {
 		const transcript = new TranscriptContainer();
-		const block = new CountingBlock(["stable row"], true);
+		const block = new ProjectionCountingBlock(["stable row"], true);
 		transcript.addChild(block);
 		for (const width of [10, 20, 30]) {
 			transcript.renderScrollableViewport(width, 1, frame, cursor(0, 0, width));
@@ -1349,7 +1349,7 @@ describe("TranscriptContainer scrollable viewport projection", () => {
 			entry.renderCalls = 0;
 		}
 
-		const tail = new CountingBlock(["active tail"], false);
+		const tail = new ProjectionCountingBlock(["active tail"], false);
 		transcript.addChild(tail);
 		childIndexReads = 0;
 		for (let frameIndex = 0; frameIndex < 5; frameIndex++) {
